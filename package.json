@@ -1,0 +1,25 @@
+{
+  "name": "cuadrilla-app",
+  "version": "2.0.0",
+  "description": "Sistema de horarios académicos con roles, integración con Figma y publicación a alumnos",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node db/seed.js",
+    "cargar-profesores": "node db/cargarProfesores.js",
+    "cargar-saul": "node db/cargarSaul.js",
+    "cargar-silvio": "node db/cargarSilvio.js",
+    "generar-claves": "node scripts/generarClaves.js",
+    "test": "node --test test/flujo.test.js test/backup-chatbot.test.js test/vinculo.test.js test/silvio.test.js test/seguridad.test.js test/extras.test.js"
+  },
+  "engines": { "node": ">=22.5.0" },
+  "dependencies": {
+    "@google/genai": "^2.22.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.22.3",
+    "express-session": "^1.19.0"
+  },
+  "license": "ISC"
+}

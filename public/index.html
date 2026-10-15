@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cuadrilla · Horarios</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ============ LOGIN / REGISTRO ============ -->
+  <div class="auth-screen" id="auth-screen">
+    <div class="auth-panel">
+      <div class="auth-brand">
+        <img src="logo.png" alt="Logo" class="logo-auth">
+        <h1>Cuadrilla</h1>
+        <p>Horarios escolares, claros y a color</p>
+      </div>
+      <div class="auth-tabs">
+        <button id="tab-login" class="auth-tab is-active" type="button">Ingresar</button>
+        <button id="tab-registro" class="auth-tab" type="button">Registrarse</button>
+      </div>
+
+      <form id="form-login" class="auth-form is-active">
+        <label>Correo electrónico<input type="email" id="login-email" required autocomplete="username" placeholder="tu.correo@institucion.edu"></label>
+        <label>Contraseña<input type="password" id="login-password" required autocomplete="current-password" placeholder="••••••••"></label>
+        <p id="login-error" class="auth-error" role="alert"></p>
+        <button type="submit" class="btn btn-primary">Entrar</button>
+      </form>
+
+      <form id="form-registro" class="auth-form">
+        <label>Nombre completo<input type="text" id="reg-nombre" required placeholder="Ej. Ana Pérez"></label>
+        <label>Correo electrónico<input type="email" id="reg-email" required autocomplete="username" placeholder="tu.correo@institucion.edu"></label>
+        <label>Contraseña<input type="password" id="reg-password" required minlength="6" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></label>
+        <label>Rol
+          <select id="reg-rol">
+            <option value="alumno">Alumno</option>
+            <option value="profesor">Profesor (requiere clave)</option>
+            <option value="admin">Administrador (requiere clave)</option>
+          </select>
+        </label>
+        <label id="reg-codigo-wrap" hidden>Clave de autorización<input type="password" id="reg-codigo" autocomplete="off" placeholder="Te la da la institución"></label>
+        <p id="reg-error" class="auth-error" role="alert"></p>
+        <button type="submit" class="btn btn-primary">Crear cuenta</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div class="app-shell" id="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand"><img src="logo.png" alt="" class="logo-sidebar"><span>Cuadrilla</span></div>
+      <nav class="sidebar-nav" id="sidebar-nav">
+        <button class="nav-item is-active" data-vista="horarios"><span class="ico">🗓️</span><span id="nav-horarios-txt">Horario</span></button>
+        <button class="nav-item" data-vista="mi-horario" data-roles="profesor"><span class="ico">⭐</span>Mi horario</button>
+        <button class="nav-item" data-vista="profesores" data-roles="admin"><span class="ico">👥</span>Por profesor</button>
+        <button class="nav-item" data-vista="salones" data-roles="admin"><span class="ico">🏫</span>Por salón</button>
+        <button class="nav-item" data-vista="cambios" data-roles="admin"><span class="ico">🔁</span>Cambios<span class="badge" id="badge-cambios" hidden></span></button>
+        <button class="nav-item" data-vista="asistencias" data-roles="profesor,admin"><span class="ico">✅</span>Asistencias</button>
+        <button class="nav-item" data-vista="avisos"><span class="ico">📣</span>Avisos</button>
+        <button class="nav-item" data-vista="noticias"><span class="ico">📰</span>Noticias</button>
+        <button class="nav-item" data-vista="chat" data-roles="profesor,admin"><span class="ico">💬</span>Asistente</button>
+        <button class="nav-item" data-vista="lista-negra" data-roles="admin"><span class="ico">🚫</span>Lista negra</button>
+        <button class="nav-item" data-vista="historial" data-roles="admin"><span class="ico">📜</span>Historial</button>
+        <button class="nav-item" data-vista="backup" data-roles="admin"><span class="ico">💾</span>Backup</button>
+      </nav>
+      <div class="sidebar-user">
+        <div class="user-chip">
+          <span class="user-avatar" id="user-avatar">?</span>
+          <span class="user-info"><span class="user-nombre" id="user-nombre"></span><span class="user-rol" id="user-rol"></span></span>
+        </div>
+        <button id="btn-salir" class="btn btn-danger btn-block" type="button">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+
+      <!-- HORARIO GENERAL -->
+      <section id="vista-horarios" class="vista is-active">
+        <header class="vista-header">
+          <div>
+            <h2 id="horarios-titulo">Horario semanal</h2>
+            <p class="sub"><span id="estado-pill" class="pill pill-borrador">En borrador</span> <span id="estado-detalle"></span></p>
+          </div>
+          <div class="acciones admin-only" hidden>
+            <button id="btn-nueva-clase" class="btn btn-secondary" type="button">+ Nueva clase</button>
+            <button id="btn-publicar" class="btn btn-primary" type="button">📢 Publicar a alumnos</button>
+          </div>
+        </header>
+
+        <div class="toolbar">
+          <input type="search" id="filtro-horarios" placeholder="Buscar materia, profesor o salón…" aria-label="Buscar">
+          <div class="leyenda" id="leyenda"></div>
+        </div>
+
+        <div id="grilla-horarios" class="semana"></div>
+      </section>
+
+      <!-- MI HORARIO (profesor) -->
+      <section id="vista-mi-horario" class="vista">
+        <header class="vista-header">
+          <div><h2>Mi horario</h2><p class="sub" id="mi-resumen"></p></div>
+          <div class="acciones vista-toggle" id="mi-vista-toggle" role="group" aria-label="Forma de ver el horario">
+            <button type="button" class="btn btn-secondary" id="btn-imprimir-mio">🖨️ Imprimir / PDF</button>
+            <button type="button" class="btn btn-secondary is-on" data-v="horas">🕒 Por horas</button>
+            <button type="button" class="btn btn-secondary" data-v="dias">🗓️ Por días</button>
+          </div>
+        </header>
+        <div id="mi-hoy" class="hoy"></div>
+        <div id="tabla-mio" class="tabla-horas-wrap"></div>
+        <div id="grilla-mio" class="semana" hidden></div>
+      </section>
+
+      <!-- HORARIO DE CADA PROFESOR (admin) -->
+      <section id="vista-profesores" class="vista">
+        <header class="vista-header">
+          <div><h2>Horario por profesor</h2><p class="sub" id="prof-resumen">Elegí un profesor para ver su horario tal como lo va a ver él.</p></div>
+          <div class="acciones vista-toggle" id="prof-vista-toggle" role="group" aria-label="Forma de ver el horario">
+            <button type="button" class="btn btn-secondary" id="btn-imprimir-prof">🖨️ Imprimir / PDF</button>
+            <button type="button" class="btn btn-secondary" id="btn-imprimir-todos">🖨️ Todos los profesores</button>
+            <button type="button" class="btn btn-secondary is-on" data-v="horas">🕒 Por horas</button>
+            <button type="button" class="btn btn-secondary" data-v="dias">🗓️ Por días</button>
+          </div>
+        </header>
+        <div class="toolbar"><select id="prof-select" aria-label="Profesor"></select></div>
+        <div id="prof-avisos"></div>
+        <div id="prof-tabla" class="tabla-horas-wrap"></div>
+        <div id="prof-grilla" class="semana" hidden></div>
+      </section>
+
+      <!-- SALONES (admin) -->
+      <section id="vista-salones" class="vista">
+        <header class="vista-header">
+          <div><h2>Horario por salón</h2><p class="sub" id="salon-resumen">Elegí un salón para ver cuándo está ocupado y cuándo libre.</p></div>
+        </header>
+        <div class="card libres-card">
+          <h3>¿Qué salones están libres?</h3>
+          <div class="libres-form">
+            <select id="libres-dia" aria-label="Día"></select>
+            <input type="time" id="libres-hora" aria-label="Hora">
+            <button type="button" class="btn btn-secondary" id="btn-libres">Ver salones libres</button>
+          </div>
+          <div id="libres-resultado"></div>
+        </div>
+        <div class="toolbar"><select id="salon-select" aria-label="Salón"></select></div>
+        <div id="salon-tabla" class="tabla-horas-wrap"></div>
+      </section>
+
+      <!-- HISTORIAL (admin) -->
+      <section id="vista-historial" class="vista">
+        <header class="vista-header"><div><h2>Historial de cambios</h2>
+          <p class="sub">Quién hizo qué y cuándo: clases, publicaciones, intercambios, importaciones y backups. Solo lo ve el administrador.</p></div></header>
+        <div class="toolbar">
+          <input type="search" id="hist-q" placeholder="Buscar por persona o detalle…" aria-label="Buscar en el historial">
+          <select id="hist-accion" aria-label="Tipo de acción"><option value="">Todas las acciones</option></select>
+        </div>
+        <div class="card" id="contenedor-historial">Cargando…</div>
+      </section>
+
+      <!-- CAMBIOS (admin aprueba intercambios) -->
+      <section id="vista-cambios" class="vista">
+        <header class="vista-header"><div><h2>Cambios de horario</h2>
+          <p class="sub">Intercambios que el asistente emparejó entre dos profesores. Al aprobarlos, el horario se actualiza solo y se les avisa.</p></div></header>
+        <div id="contenedor-cambios" class="feed">Cargando…</div>
+      </section>
+
+      <!-- ASISTENCIAS -->
+      <section id="vista-asistencias" class="vista">
+        <header class="vista-header"><div><h2>Asistencias</h2>
+          <p class="sub">Días en <b class="txt-ok">verde</b> (asistió) y <b class="txt-mal">rojo</b> (faltó).</p></div></header>
+        <div class="card">
+          <div class="cal-head">
+            <h3 id="cal-mes-anio"></h3>
+            <div id="admin-asistencia-controls" class="admin-only" hidden>
+              <select id="select-dia-asistencia" aria-label="Día"></select>
+              <select id="select-estado-asistencia" aria-label="Estado">
+                <option value="asistio">Asistió</option><option value="falto">Faltó</option>
+              </select>
+              <button id="btn-guardar-asistencia" class="btn btn-secondary" type="button">Actualizar</button>
+            </div>
+          </div>
+          <div class="cal-sem"><div>Dom</div><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div></div>
+          <div id="calendario-dias" class="cal-dias"></div>
+        </div>
+      </section>
+
+      <!-- AVISOS -->
+      <section id="vista-avisos" class="vista">
+        <header class="vista-header"><div><h2>Avisos</h2><p class="sub">Comunicados importantes de la institución.</p></div></header>
+        <form class="card admin-only form-publicar" data-tipo="aviso" hidden>
+          <h3>Publicar aviso</h3>
+          <input type="text" name="titulo" required maxlength="150" placeholder="Título">
+          <textarea name="contenido" required maxlength="2000" rows="3" placeholder="Detalle del aviso…"></textarea>
+          <button class="btn btn-primary" type="submit">Publicar</button>
+        </form>
+        <div id="lista-avisos" class="feed"></div>
+      </section>
+
+      <!-- NOTICIAS -->
+      <section id="vista-noticias" class="vista">
+        <header class="vista-header"><div><h2>Noticias</h2><p class="sub">Novedades y eventos escolares.</p></div></header>
+        <form class="card admin-only form-publicar" data-tipo="noticia" hidden>
+          <h3>Publicar noticia</h3>
+          <input type="text" name="titulo" required maxlength="150" placeholder="Título">
+          <textarea name="contenido" required maxlength="2000" rows="3" placeholder="Cuerpo de la noticia…"></textarea>
+          <button class="btn btn-primary" type="submit">Publicar</button>
+        </form>
+        <div id="lista-noticias" class="feed"></div>
+      </section>
+
+      <!-- CHAT -->
+      <section id="vista-chat" class="vista">
+        <header class="vista-header"><div><h2>Asistente</h2><p class="sub">Preguntá por disponibilidad, reemplazos o pedí la tabla y la imagen del horario.</p></div></header>
+        <div class="chat-atajos" id="chat-atajos"></div>
+        <div class="card chat-box">
+          <div id="chat-mensajes" class="chat-mensajes"><div class="chat-msg bot">¡Hola! ¿En qué te ayudo con los horarios?</div></div>
+          <form id="chat-form" class="chat-form">
+            <input type="text" id="chat-input" placeholder="Escribí un mensaje…" autocomplete="off">
+            <button type="submit" class="btn btn-primary">Enviar</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- BACKUP (solo admin) -->
+      <section id="vista-backup" class="vista">
+        <header class="vista-header">
+          <div><h2>Backup</h2><p class="sub">Copias de seguridad de toda la base de datos. Solo las ve y gestiona el administrador. Se crea una automática por día (se guardan las últimas 14).</p></div>
+          <div class="acciones"><button id="btn-crear-backup" class="btn btn-primary" type="button">💾 Crear backup ahora</button></div>
+        </header>
+        <div class="card" id="contenedor-backups">Cargando…</div>
+      </section>
+
+      <!-- LISTA NEGRA -->
+      <section id="vista-lista-negra" class="vista">
+        <header class="vista-header"><div><h2>Lista negra</h2><p class="sub">Profesores que alcanzaron el límite de faltas.</p></div></header>
+        <div class="card" id="contenedor-lista-negra">Cargando…</div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal crear/editar clase -->
+  <dialog id="modal-clase">
+    <form id="form-clase" method="dialog">
+      <h3 id="modal-clase-titulo">Nueva clase</h3>
+      <div class="grid2">
+        <label>Día<select id="clase-dia"></select></label>
+        <label>Materia<input type="text" id="clase-materia" required maxlength="80" placeholder="Matemáticas"></label>
+        <label>Desde<input type="time" id="clase-inicio" required></label>
+        <label>Hasta<input type="time" id="clase-fin" required></label>
+        <label>Salón<input type="text" id="clase-salon" maxlength="40" placeholder="Aula 101"></label>
+        <label>Profesor<select id="clase-profesor"></select></label>
+        <label>Lugar<select id="clase-lugar">
+          <option value="">Sin especificar</option>
+          <option value="amarillo">Liceo (amarillo)</option>
+          <option value="azul">UTU (azul)</option>
+          <option value="verde">Coordinación (verde)</option>
+        </select></label>
+      </div>
+      <p id="clase-error" class="auth-error" role="alert"></p>
+      <div class="modal-acciones">
+        <button type="button" class="btn btn-ghost" id="clase-cancelar">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="zona-impresion" aria-hidden="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
