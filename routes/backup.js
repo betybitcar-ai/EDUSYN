@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db/database');
 const backup = require('../lib/backupLib');
 const historial = require('../lib/historialLib');
+const { generarPdfBackup } = require('../lib/backupPdfLib');
 const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
@@ -30,6 +31,15 @@ router.post('/', manejar((req, res) => {
 router.get('/:nombre/descargar', manejar((req, res) => {
   const ruta = backup.rutaBackup(req.params.nombre);
   res.download(ruta, req.params.nombre);
+}));
+
+// GET /api/backup/:nombre/pdf - informe legible del backup (horarios, profesores, usuarios); no incluye contraseñas
+router.get('/:nombre/pdf', manejar((req, res) => {
+  const ruta = backup.rutaBackup(req.params.nombre);
+  const pdf = generarPdfBackup(ruta, req.params.nombre);
+  historial.registrar(req.session.user, 'backup', `Descargó en PDF el backup ${req.params.nombre}`);
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${req.params.nombre.replace(/\.db$/, '')}.pdf"`, 'Content-Length': pdf.length });
+  res.end(pdf);
 }));
 
 // POST /api/backup/:nombre/restaurar { confirmar: true } - reemplaza los datos actuales

@@ -45,11 +45,17 @@ const estado = {
   horarios: [],
   publicado: false,
   publicadoEn: null,
+  cursos: [],            // [{ curso, publicado, publicado_en, clases }]: un horario (borrador/publicado) por curso
+  cursoActual: null,     // curso cuyo horario se está viendo / armando
   profesores: [],
   traslados: [],
   salones: [],
   filtroMateria: null,
   vistaMio: 'horas',
+  entrega: { entregado: true },   // profesor: ¿ya entregó su horario semanal?
+  entregas: { profesores: [], pendientes: 0 },   // admin: quién entregó
+  choques: { choques: [], revisados: 0, sin_entregar: 0 },   // admin: lo entregado contra la grilla
+  destinos: { cursos: [], turnos: [], profesores: [] },     // admin: opciones para dirigir un aviso
   editandoId: null
 };
 const esAdmin = () => estado.user?.rol === 'admin';
@@ -107,18 +113,56 @@ async function entrar(user) {
     b.hidden = Boolean(roles) && !roles.split(',').includes(user.rol);
   });
   $$('.admin-only').forEach(el => { el.hidden = !esAdmin(); });
+  $('#btn-foto-horario').hidden = !(esProfe() || esAdmin());
+  $('#sel-foto-profe').hidden = !esAdmin();
+  $('#descargas-horario').hidden = esProfe();   // admin y alumnos descargan la grilla general; el profesor, su propio horario
   if (esProfe()) $('#horarios-titulo').textContent = 'Horario de toda la institución';
 
   if (esAdmin()) {
     estado.profesores = (await api('/api/horarios/profesores').catch(() => ({ profesores: [] }))).profesores;
+    const sel = $('#sel-foto-profe');
+    sel.innerHTML = '<option value="">¿De qué profesor es la foto?</option>' + estado.profesores.filter(p => p.id).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join('');
   }
   await cargarHorarios();
   if (esAdmin()) actualizarBadgeCambios();
+  await cargarEntrega();
+  if (window.Clima) Clima.iniciar();   // clima de Artigas para todos los roles
+  if (esProfe() && !estado.entrega.entregado) {
+    chatBurbuja('bot', { html: mdHtml('¡Hola **' + user.nombre + '**! Antes de empezar necesito tu **horario semanal** (es obligatorio). Escribilo o pegalo acá, una clase por línea con el día, la hora, el curso y el lugar (liceo, UTU o coordinación). Por ejemplo:\n\n- `Lunes 07:30-09:00 3°MA liceo`\n- `Lunes 09:05-10:35 3°DF utu`\n- `Miércoles 10:40-11:25 Coordinación`\n\nApenas lo reciba se lo paso a la administración.') });
+    irA('chat');
+    return;
+  }
   irA(esProfe() ? 'mi-horario' : 'horarios');
+}
+
+/* ====================== entrega obligatoria del horario ====================== */
+async function cargarEntrega() {
+  try {
+    if (esProfe()) estado.entrega = await api('/api/horarios/entrega');
+    else if (esAdmin()) estado.entregas = await api('/api/horarios/entrega');
+  } catch { /* si falla, no se bloquea la app */ }
+  renderBloqueoEntrega();
+}
+
+// Aviso fijo + menú bloqueado para el profesor que todavía no entregó.
+function renderBloqueoEntrega() {
+  const bloquear = esProfe() && !estado.entrega.entregado;
+  $('#aviso-entrega').hidden = !bloquear;
+  $$('#sidebar-nav .nav-item').forEach(b => {
+    const libre = b.dataset.vista === 'chat';
+    b.classList.toggle('is-bloqueado', bloquear && !libre);
+    b.title = bloquear && !libre ? 'Primero entregá tu horario semanal' : '';
+  });
 }
 
 /* ================================ navegación ================================ */
 function irA(vista) {
+  // Obligatorio: mientras el profesor no entregue su horario semanal, solo puede usar el Asistente.
+  if (esProfe() && !estado.entrega.entregado && vista !== 'chat') {
+    toast('Primero entregá tu horario semanal: es obligatorio.', true);
+    vista = 'chat';
+  }
+  renderBloqueoEntrega();
   $$('#sidebar-nav .nav-item').forEach(b => b.classList.toggle('is-active', b.dataset.vista === vista));
   $$('.main-area .vista').forEach(v => v.classList.toggle('is-active', v.id === `vista-${vista}`));
   if (vista === 'avisos') cargarFeed('aviso');
@@ -128,10 +172,12 @@ function irA(vista) {
   if (vista === 'chat') chatAtajos();
   if (vista === 'asistencias') renderCalendario();
   if (vista === 'mi-horario') renderMiHorario();
-  if (vista === 'profesores') renderProfesores();
+  if (vista === 'profesores') { renderProfesores(); cargarEntrega().then(renderProfesores); }
   if (vista === 'cambios') cargarCambios();
   if (vista === 'salones') renderSalones();
   if (vista === 'historial') cargarHistorial();
+  if (vista === 'clima' && window.Clima) Clima.abrir();
+  if (vista === 'mapa3d' && window.Mapa3D) Mapa3D.abrir();
 }
 $$('#sidebar-nav .nav-item').forEach(b => b.addEventListener('click', () => irA(b.dataset.vista)));
 
@@ -144,34 +190,94 @@ const horariosGenerales = () => estado.horarios.filter(h => !esHorarioDeProfesor
 async function cargarHorarios() {
   const data = await api('/api/horarios');
   estado.horarios = data.horarios;
+  estado.cursos = data.cursos || [];
   estado.publicado = data.publicado;
   estado.publicadoEn = data.publicado_en;
+  if (!estado.cursos.some(c => c.curso === estado.cursoActual)) estado.cursoActual = estado.cursos[0]?.curso || null;
   renderEstadoPublicacion();
   renderHorarios();
   if (esProfe()) renderMiHorario();
   if (esAdmin()) {
     estado.traslados = (await api('/api/horarios/traslados').catch(() => ({ traslados: [] }))).traslados;
     estado.salones = (await api('/api/horarios/salones').catch(() => ({ salones: [] }))).salones;
+    estado.choques = await api('/api/horarios/choques').catch(() => ({ choques: [], revisados: 0, sin_entregar: 0 }));
+    const nCh = estado.choques.choques.length, badge = $('#badge-choques');
+    badge.hidden = !nCh; badge.textContent = nCh;
     renderProfesores();
   }
 }
 
+// Datos del curso que se está viendo (cada curso tiene su propio estado de publicación).
+const datosCurso = () => estado.cursos.find(c => c.curso === estado.cursoActual) || null;
+const clasesDelCurso = () => horariosGenerales().filter(h => (h.curso || '').toLowerCase() === (estado.cursoActual || '').toLowerCase());
+
+function renderCursosTabs() {
+  const cont = $('#cursos-tabs');
+  if (!estado.cursos.length) {
+    cont.innerHTML = `<span class="cursos-vacio">${esAdmin() ? 'Todavía no hay cursos: creá el primero con “+ Nuevo curso”.' : ''}</span>`;
+  } else {
+    cont.innerHTML = estado.cursos.map(c => `<button type="button" role="tab" aria-selected="${c.curso === estado.cursoActual}"
+        class="curso-tab${c.curso === estado.cursoActual ? ' is-on' : ''}" data-curso="${esc(c.curso)}">
+        ${esAdmin() ? `<span class="punto${c.publicado ? ' pub' : ''}" title="${c.publicado ? 'Publicado' : 'En borrador'}"></span>` : ''}${esc(c.curso)} <small>${c.clases}</small></button>`).join('');
+  }
+  const d = datosCurso();
+  $('#btn-quitar-curso').hidden = !(esAdmin() && d && d.clases === 0);
+}
+$('#cursos-tabs').addEventListener('click', (e) => {
+  const t = e.target.closest('.curso-tab');
+  if (!t) return;
+  estado.cursoActual = t.dataset.curso;
+  estado.filtroMateria = null;
+  renderEstadoPublicacion();
+  renderHorarios();
+});
+
+$('#btn-nuevo-curso').onclick = async () => {
+  const nombre = (prompt('¿Para qué curso es el nuevo horario? (ej. 3°MF, 7°3, 3°CAD)') || '').trim();
+  if (!nombre) return;
+  try {
+    const r = await api('/api/horarios/cursos', { method: 'POST', body: { curso: nombre } });
+    estado.cursos = r.cursos;
+    estado.cursoActual = (r.cursos.find(c => c.curso.toLowerCase() === nombre.toLowerCase()) || {}).curso || nombre;
+    toast(`Horario de ${estado.cursoActual} creado (en borrador)`);
+    renderEstadoPublicacion();
+    renderHorarios();
+  } catch (err) { toast(err.message, true); }
+};
+
+$('#btn-quitar-curso').onclick = async () => {
+  const d = datosCurso();
+  if (!d || d.clases) return;
+  if (!confirm(`¿Quitar el curso ${d.curso}? No tiene clases cargadas.`)) return;
+  try {
+    await api(`/api/horarios/cursos/${encodeURIComponent(d.curso)}`, { method: 'DELETE' });
+    toast(`Curso ${d.curso} quitado`);
+    await cargarHorarios();
+  } catch (err) { toast(err.message, true); }
+};
+
 function renderEstadoPublicacion() {
+  renderCursosTabs();
+  const d = datosCurso();
+  const pub = Boolean(d && d.publicado);
   const pill = $('#estado-pill');
-  pill.textContent = estado.publicado ? 'Publicado' : 'En borrador';
-  pill.className = `pill ${estado.publicado ? 'pill-publicado' : 'pill-borrador'}`;
+  pill.textContent = !d ? 'Sin curso' : (pub ? 'Publicado' : 'En borrador');
+  pill.className = `pill ${pub ? 'pill-publicado' : 'pill-borrador'}`;
   let detalle = '';
   if (esAdmin()) {
-    detalle = estado.publicado
-      ? `Profesores y alumnos ya lo ven${estado.publicadoEn ? ' · desde ' + new Date(estado.publicadoEn).toLocaleString('es') : ''}.`
-      : 'Borrador: solo vos lo ves. Al publicarlo, cada profesor ve su propio horario y los alumnos la grilla.';
+    detalle = !d ? 'Creá el horario de un curso para empezar.'
+      : pub ? `El horario de ${d.curso} ya lo ven profesores y alumnos${d.publicado_en ? ' · desde ' + new Date(d.publicado_en).toLocaleString('es') : ''}.`
+        : `Borrador de ${d.curso}: solo vos lo ves. Cada curso se publica por separado.`;
   } else if (esProfe()) {
-    detalle = estado.publicado ? 'Publicado por la administración.' : 'La administración todavía no lo publicó.';
+    detalle = d ? `Horario de ${d.curso}, publicado por la administración.` : 'La administración todavía no publicó ningún curso.';
   }
   $('#estado-detalle').textContent = detalle;
   const btn = $('#btn-publicar');
-  btn.textContent = estado.publicado ? '🔒 Volver a borrador' : '📢 Publicar a alumnos';
-  btn.className = `btn ${estado.publicado ? 'btn-secondary' : 'btn-primary'}`;
+  btn.disabled = !d;
+  btn.textContent = pub ? `🔒 Volver ${d.curso} a borrador` : `📢 Publicar ${d ? d.curso : 'curso'}`;
+  btn.className = `btn ${pub ? 'btn-secondary' : 'btn-primary'}`;
+  $('#btn-nueva-clase').disabled = !d;
+  $('#btn-nuevo-curso').hidden = !esAdmin();
   // Alumnos: ocultar estado, no les sirve
   $('#estado-pill').hidden = estado.user.rol === 'alumno';
 }
@@ -194,8 +300,9 @@ function tarjetaClase(h, { conAcciones = true } = {}) {
   }
   return `<article class="clase${mia ? ' mia' : ''}" style="--h:${matiz(h.materia)}"
             data-materia="${esc(h.materia)}"
-            data-busca="${esc((h.materia + ' ' + (h.profesor_nombre || '') + ' ' + (h.salon || '')).toLowerCase())}">
+            data-busca="${esc((h.materia + ' ' + (h.curso || '') + ' ' + (h.profesor_nombre || '') + ' ' + (h.salon || '')).toLowerCase())}">
       <span class="clase-hora">${esc(h.hora_inicio)} – ${esc(h.hora_fin)}</span>
+      ${h.curso ? `<div class="clase-curso">🎓 Curso ${esc(h.curso)}</div>` : ''}
       <div class="clase-materia">${esc(h.materia)}</div>
       ${h.salon ? `<div class="clase-salon">📍 ${esc(h.salon)}</div>` : ''}
       ${profHtml}
@@ -219,11 +326,12 @@ function grillaHtml(lista, opciones) {
 
 function renderHorarios() {
   const cont = $('#grilla-horarios');
-  const generales = horariosGenerales();
-  const sinContenido = (!esAdmin() && !estado.publicado) || !generales.length;
+  poblarCursosExport();
+  const generales = clasesDelCurso();   // solo las clases del curso elegido: cada curso es un horario aparte
+  const sinContenido = !estado.cursoActual || !generales.length;
   $('.toolbar').hidden = sinContenido;
 
-  if (!esAdmin() && !estado.publicado) {
+  if (!esAdmin() && !estado.cursos.length) {
     cont.style.setProperty('--cols', 1);
     cont.innerHTML = `<div class="vacio"><div class="emoji">🛠️</div><h3>El horario todavía se está armando</h3>
       <p class="muted">Cuando la administración lo publique, lo vas a ver acá${esProfe() ? ', y tu horario personal en “Mi horario”' : ' con todos sus colores'}.</p></div>`;
@@ -233,7 +341,7 @@ function renderHorarios() {
   if (!generales.length) {
     cont.style.setProperty('--cols', 1);
     cont.innerHTML = `<div class="vacio"><div class="emoji">🗓️</div><h3>No hay clases cargadas</h3>
-      <p class="muted">${esAdmin() ? 'Creá una clase con “+ Nueva clase”.' : 'Todavía no hay clases.'}</p></div>`;
+      <p class="muted">${esAdmin() ? (estado.cursoActual ? `Cargá la primera clase de ${esc(estado.cursoActual)} con “+ Nueva clase”.` : 'Creá el horario de un curso con “+ Nuevo curso”.') : 'Todavía no hay clases.'}</p></div>`;
     $('#leyenda').innerHTML = '';
     return;
   }
@@ -288,14 +396,17 @@ $('#grilla-mio').addEventListener('click', manejarAccion);
 
 /* ---------- publicar ---------- */
 $('#btn-publicar').onclick = async () => {
-  const quiere = !estado.publicado;
-  const sinProf = horariosGenerales().filter(h => !h.profesor_id && !h.profesor_nombre).length;
+  const d = datosCurso();
+  if (!d) return;
+  const quiere = !d.publicado;
+  const clases = clasesDelCurso();
+  const sinProf = clases.filter(h => !h.profesor_id && !h.profesor_nombre).length;
   const traslados = estado.traslados.length ? `\n\nOjo: ${estado.traslados.length} traslado(s) liceo↔UTU con poco margen (miralos en “Por profesor”).` : '';
   const aviso = (sinProf ? `\n\nOjo: ${sinProf} clase(s) todavía no tienen profesor.` : '') + traslados;
-  if (!confirm(quiere ? `¿Publicar el horario? Cada profesor va a ver su propio horario en “Mi horario” y los alumnos la grilla.${aviso}` : '¿Volver a borrador? Profesores y alumnos dejarán de verlo.')) return;
+  if (!confirm(quiere ? `¿Publicar el horario de ${d.curso}? Los profesores de ese curso van a ver sus clases en “Mi horario” y los alumnos la grilla de ${d.curso}. Los demás cursos no se tocan.${aviso}` : `¿Volver ${d.curso} a borrador? Profesores y alumnos dejarán de ver ese curso (los otros siguen igual).`)) return;
   try {
-    const r = await api('/api/horarios/publicar', { method: 'POST', body: { publicado: quiere } });
-    toast(quiere ? `¡Horario publicado! Se avisó a ${r.profesores_avisados} profesor${r.profesores_avisados === 1 ? '' : 'es'}.` : 'El horario volvió a borrador');
+    const r = await api('/api/horarios/publicar', { method: 'POST', body: { curso: d.curso, publicado: quiere } });
+    toast(quiere ? `¡Horario de ${d.curso} publicado! Se avisó a ${r.profesores_avisados} profesor${r.profesores_avisados === 1 ? '' : 'es'}.` : `${d.curso} volvió a borrador`);
     await cargarHorarios();
   } catch (err) { toast(err.message, true); }
 };
@@ -312,6 +423,8 @@ function abrirModal(h = null) {
   $('#modal-clase-titulo').textContent = h ? 'Editar clase' : 'Nueva clase';
   $('#clase-error').textContent = '';
   $('#clase-dia').value = h?.dia || 'Lunes';
+  // El curso no se elige acá: la clase va al horario del curso que se está armando (uno por vez).
+  $('#clase-curso').value = h?.curso || estado.cursoActual || '';
   $('#clase-materia').value = h?.materia || '';
   $('#clase-inicio').value = h?.hora_inicio || '08:00';
   $('#clase-fin').value = h?.hora_fin || '09:30';
@@ -327,14 +440,17 @@ function abrirModal(h = null) {
   $('#clase-profesor').value = claveProfesor(h);
   modal.showModal();
 }
-$('#btn-nueva-clase').onclick = () => abrirModal();
+$('#btn-nueva-clase').onclick = () => {
+  if (!estado.cursoActual) return toast('Primero creá el horario de un curso con “+ Nuevo curso”.', true);
+  abrirModal();
+};
 $('#clase-cancelar').onclick = () => modal.close();
 
 $('#form-clase').addEventListener('submit', async (e) => {
   e.preventDefault();
   const pid = $('#clase-profesor').value;
   const cuerpo = {
-    dia: $('#clase-dia').value, materia: $('#clase-materia').value,
+    curso: (estado.editandoId ? ($('#clase-curso').value) : estado.cursoActual || '').trim(), dia: $('#clase-dia').value, materia: $('#clase-materia').value,
     hora_inicio: $('#clase-inicio').value, hora_fin: $('#clase-fin').value,
     salon: $('#clase-salon').value, color: $('#clase-lugar').value
   };
@@ -357,15 +473,6 @@ $('#form-clase').addEventListener('submit', async (e) => {
 function renderMiHorario() {
   if (!esProfe()) return;
   const mias = estado.horarios.filter(h => h.profesor_id === estado.user.id);
-  if (!estado.publicado) {
-    $('#mi-resumen').textContent = '';
-    $('#mi-hoy').innerHTML = '';
-    $('#tabla-mio').hidden = true;
-    const c = $('#grilla-mio'); c.hidden = false; c.style.setProperty('--cols', 1);
-    c.innerHTML = `<div class="vacio"><div class="emoji">🛠️</div><h3>Tu horario todavía no está publicado</h3>
-      <p class="muted">Cuando la administración publique el horario, tus clases te van a aparecer acá.</p></div>`;
-    return;
-  }
   const horas = mias.reduce((acc, h) => {
     const [a, b] = h.hora_inicio.split(':').map(Number), [c, d] = h.hora_fin.split(':').map(Number);
     return acc + ((c * 60 + d) - (a * 60 + b)) / 60;
@@ -385,7 +492,7 @@ function renderMiHorario() {
     $('#tabla-mio').hidden = true; cont.hidden = false;
     cont.style.setProperty('--cols', 1);
     cont.innerHTML = `<div class="vacio"><div class="emoji">🌤️</div><h3>Sin clases asignadas</h3>
-      <p class="muted">La administración te va a asignar tus clases, o podés tomar una libre desde “Horario”.</p></div>`;
+      <p class="muted">Todavía no tenés clases cargadas. Mandale tu horario al Asistente (podés subir una foto) y aparece acá.</p></div>`;
     return;
   }
   const { html, cols } = grillaHtml(mias, { conAcciones: true });
@@ -398,22 +505,55 @@ function renderMiHorario() {
   $$('#mi-vista-toggle [data-v]').forEach(b => b.classList.toggle('is-on', b.dataset.v === estado.vistaMio));
 }
 
+// Cursos que se ofrecen al elegir el curso de una clase (el admin igual puede escribir cualquier otro).
+// 1) Bachilleratos Tecnológicos Profesionales (BTP) de la Escuela Técnica de Artigas "Maestro Carlos Martín de Vecchi",
+//    según su oferta educativa publicada por la UTU, en 1°, 2° y 3° año. Para agregar o quitar uno, editá BTP_ARTIGAS.
+// 2) Los grupos con sigla que ya usan los horarios cargados de la escuela (3°MA, 3°CAD…), en 1°, 2° y 3°. Editá ORIENTACIONES_UTU.
+const BTP_ARTIGAS = ['BTP Gastronomía', 'BTP Carpintería', 'BTP Electricidad', 'BTP Electrotecnia', 'BTP Sist. Mecánicos Automatizados'];
+const ORIENTACIONES_UTU = ['MA', 'MB', 'MC', 'MF', 'MT', 'CAD', 'CVH', 'CT', 'HCP', 'DF', 'BA'];
+const BACHILLERATOS_UTU = [
+  ...[1, 2, 3].flatMap(a => BTP_ARTIGAS.map(o => `${a}° ${o}`)),
+  ...[1, 2, 3].flatMap(a => ORIENTACIONES_UTU.map(o => `${a}°${o}`))
+];
+
 /* ---------- admin: horario de cada profesor ---------- */
 let profSeleccion = '';
 function renderProfesores() {
   if (!esAdmin()) return;
   const sel = $('#prof-select');
   const conteo = (p) => estado.horarios.filter(h => claveProfesor(h) === (p.id ? String(p.id) : `n:${p.nombre}`)).length;
-  const opcion = (p) => `<option value="${p.id ? p.id : 'n:' + esc(p.nombre)}">${esc(p.nombre)} (${conteo(p)} clases)${p.cuenta ? '' : ' · sin cuenta aún'}</option>`;
+  const entregaDe = (p) => p.id ? estado.entregas.profesores.find(x => x.id === p.id) : null;
+  const marca = (p) => { const e = entregaDe(p); return e ? (e.entregado ? '✅ ' : '⏳ ') : ''; };
+  const opcion = (p) => `<option value="${p.id ? p.id : 'n:' + esc(p.nombre)}">${marca(p)}${esc(p.nombre)} (${conteo(p)} clases)${p.cuenta ? '' : ' · sin cuenta aún'}</option>`;
   const grupo = (titulo, lista) => lista.length ? `<optgroup label="${titulo}">${lista.map(opcion).join('')}</optgroup>` : '';
   sel.innerHTML = grupo('Turno 1', estado.profesores.filter(p => p.turno === 1)) + grupo('Turno 2', estado.profesores.filter(p => p.turno === 2)) +
     grupo('Otros', estado.profesores.filter(p => !p.turno));
   if (!profSeleccion || ![...sel.options].some(o => o.value === profSeleccion)) profSeleccion = sel.options[0]?.value || '';
   sel.value = profSeleccion;
+  const pSel = estado.profesores.find(x => (x.id ? String(x.id) : `n:${x.nombre}`) === profSeleccion);
+  $('#btn-reset-clave').hidden = !(pSel && pSel.id);   // solo si ya tiene cuenta
 
+  // Entrega obligatoria: resumen de pendientes y estado del profesor elegido.
+  const pend = estado.entregas.profesores.filter(x => !x.entregado);
+  const eSel = pSel && pSel.id ? estado.entregas.profesores.find(x => x.id === pSel.id) : null;
+  $('#prof-entrega').innerHTML = estado.entregas.profesores.length
+    ? `<div class="aviso-entrega ${pend.length ? 'pendiente' : 'ok'}">${pend.length
+        ? `⏳ <b>${pend.length}</b> profesor${pend.length === 1 ? '' : 'es'} sin entregar el horario semanal (obligatorio): ${pend.map(x => esc(x.nombre)).join(', ')}. <button type="button" class="mini" id="btn-recordar-entrega">🔔 Recordarles</button>`
+        : '✅ Todos los profesores con cuenta entregaron su horario semanal.'}
+       ${eSel ? `<div class="entrega-sel">${eSel.entregado ? `✅ <b>${esc(eSel.nombre)}</b> entregó su horario${eSel.enviado_en ? ' el ' + esc(new Date(eSel.enviado_en.replace(' ', 'T') + 'Z').toLocaleString('es')) : ''}.` : `⏳ <b>${esc(eSel.nombre)}</b> todavía no entregó su horario.`}</div>` : ''}</div>`
+    : '';
+  // Foto del horario que mandó el profesor (o el admin por él): se ve acá aunque todavía no esté pasada a clases.
+  $('#prof-foto').innerHTML = eSel && eSel.con_foto
+    ? `<div class="foto-entrega"><a href="/api/horarios/entrega/foto/${eSel.id}" target="_blank" rel="noopener"><img alt="Foto del horario de ${esc(eSel.nombre)}" src="/api/horarios/entrega/foto/${eSel.id}?t=${encodeURIComponent(eSel.enviado_en || '')}"></a>
+         <div><b>📷 Foto del horario de ${esc(eSel.nombre)}</b><p class="muted">${eSel.cantidad ? `Ya está pasada a clases (${eSel.cantidad}).` : 'Todavía no está pasada a clases: mirála y cargala con el asistente.'}</p>
+         <button type="button" class="mini" id="btn-transcribir-foto" data-nombre="${esc(eSel.nombre)}">✍️ Cargar sus clases en el asistente</button></div></div>`
+    : '';
   const tabla = $('#prof-tabla'), grilla = $('#prof-grilla');
+  renderChoques();
   const avisos = estado.traslados.filter(t => t.clave === profSeleccion);
-  $('#prof-avisos').innerHTML = avisos.map(t => `<div class="aviso-traslado">⚠️ ${esc(t.texto)}</div>`).join('');
+  const choquesSel = estado.choques.choques.filter(c => c.clave === profSeleccion);
+  $('#prof-avisos').innerHTML = choquesSel.map(c => `<div class="aviso-choque" data-tipo="${esc(c.tipo)}">${ICONO_CHOQUE[c.tipo] || '⚠️'} ${esc(c.texto)}</div>`).join('')
+    + avisos.map(t => `<div class="aviso-traslado">⚠️ ${esc(t.texto)}</div>`).join('');
   const mias = estado.horarios.filter(h => claveProfesor(h) === profSeleccion);
   const p = estado.profesores.find(x => (x.id ? String(x.id) : `n:${x.nombre}`) === profSeleccion);
   const horas = mias.reduce((acc, h) => acc + (aMin(h.hora_fin) - aMin(h.hora_inicio)) / 60, 0);
@@ -434,6 +574,46 @@ function renderProfesores() {
   grilla.hidden = porHoras;
   $$('#prof-vista-toggle [data-v]').forEach(b => b.classList.toggle('is-on', b.dataset.v === (porHoras ? 'horas' : 'dias')));
 }
+// Resumen de diferencias entre lo que entregaron los profesores y la grilla (solo admin).
+const ICONO_CHOQUE = { doble_lugar: '🔀', hora_distinta: '🕒', falta: '❓' };
+function renderChoques() {
+  const { choques, revisados, sin_entregar: sinEntregar } = estado.choques;
+  const porProfe = new Map();
+  for (const c of choques) {
+    if (!porProfe.has(c.clave)) porProfe.set(c.clave, { clave: c.clave, nombre: c.profesor, n: 0 });
+    porProfe.get(c.clave).n++;
+  }
+  const nota = sinEntregar ? `<div class="choque-nota">${sinEntregar} profesor${sinEntregar === 1 ? '' : 'es'} con clases en la grilla todavía no entregaron nada, así que no se pueden comparar.</div>` : '';
+  if (!choques.length) {
+    $('#prof-choques').innerHTML = revisados || sinEntregar
+      ? `<div class="aviso-entrega ${revisados ? 'ok' : 'pendiente'}">${revisados ? `✅ Lo que entregaron ${revisados} profesor${revisados === 1 ? '' : 'es'} coincide con la grilla.` : '🔎 Todavía no hay entregas para comparar con la grilla.'}${nota}</div>`
+      : '';
+    return;
+  }
+  const chips = [...porProfe.values()].map(p => `<button type="button" class="chip-choque${p.clave === profSeleccion ? ' is-on' : ''}" data-clave="${esc(p.clave)}">${esc(p.nombre)} · ${p.n}</button>`).join('');
+  $('#prof-choques').innerHTML = `<div class="aviso-choque aviso-choque-resumen"><b>⚠️ ${choques.length} diferencia${choques.length === 1 ? '' : 's'} entre lo que entregaron los profesores y la grilla</b>
+    <div class="chips-choque">${chips}</div>${nota}</div>`;
+}
+$('#prof-choques').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-clave]');
+  if (!b) return;
+  profSeleccion = b.dataset.clave;
+  renderProfesores();
+});
+$('#prof-foto').addEventListener('click', (e) => {
+  const b = e.target.closest('#btn-transcribir-foto');
+  if (!b) return;
+  irA('chat');
+  const input = $('#chat-input');
+  input.value = `Cargar horario de ${b.dataset.nombre}:\nLunes 07:30-09:00 3°MA liceo\n`;
+  input.dispatchEvent(new Event('input'));
+  input.focus();
+});
+$('#prof-entrega').addEventListener('click', async (e) => {
+  if (!e.target.closest('#btn-recordar-entrega')) return;
+  try { const r = await api('/api/horarios/entrega/recordar', { method: 'POST' }); toast(`Recordatorio enviado a ${r.avisados} profesor${r.avisados === 1 ? '' : 'es'}`); }
+  catch (err) { toast(err.message, true); }
+});
 $('#prof-select').addEventListener('change', (e) => { profSeleccion = e.target.value; renderProfesores(); });
 $('#prof-vista-toggle').addEventListener('click', (e) => {
   const b = e.target.closest('[data-v]');
@@ -506,6 +686,14 @@ async function cargarHistorial() {
 let histTimer;
 $('#hist-q').addEventListener('input', () => { clearTimeout(histTimer); histTimer = setTimeout(cargarHistorial, 250); });
 $('#hist-accion').addEventListener('change', cargarHistorial);
+$('#btn-borrar-historial').onclick = async () => {
+  if (!confirm('¿Borrar TODO el historial de cambios? No se puede deshacer (los backups guardados no se tocan).')) return;
+  try {
+    const r = await api('/api/historial', { method: 'DELETE' });
+    toast(`Historial borrado (${r.borrados} registro${r.borrados === 1 ? '' : 's'})`);
+    cargarHistorial();
+  } catch (err) { toast(err.message, true); }
+};
 
 /* ---------- imprimir / guardar como PDF ---------- */
 // Arma una hoja por profesor en #zona-impresion y abre el diálogo de impresión (ahí se elige "Guardar como PDF").
@@ -513,12 +701,12 @@ function imprimirHorarios(lista) {
   const conClases = lista.filter(x => x.clases.length);
   if (!conClases.length) return toast('No hay clases para imprimir.', true);
   const fecha = new Date().toLocaleDateString('es');
-  $('#zona-impresion').innerHTML = conClases.map(({ nombre, clases }) => {
+  $('#zona-impresion').innerHTML = conClases.map(({ nombre, clases, conProfesor }) => {
     const horas = clases.reduce((a, h) => a + (aMin(h.hora_fin) - aMin(h.hora_inicio)) / 60, 0);
     return `<section class="hoja">
       <h1>${esc(nombre)}</h1>
       <p class="hoja-sub">Cuadrilla · Horario semanal · ${clases.length} clases · ${horas.toFixed(1).replace('.0', '')} h semanales · ${fecha}</p>
-      ${tablaHorasHtml(clases)}
+      ${tablaHorasHtml(clases, { mostrarProfesor: Boolean(conProfesor) })}
       <p class="hoja-leyenda"><span style="background:${COLORES_CLASE.amarillo}"></span>Liceo <span style="background:${COLORES_CLASE.azul}"></span>UTU <span style="background:${COLORES_CLASE.verde}"></span>Coordinación</p>
     </section>`;
   }).join('');
@@ -534,6 +722,74 @@ $('#btn-imprimir-prof').onclick = () => {
 };
 $('#btn-imprimir-todos').onclick = () => imprimirHorarios(estado.profesores.map(p => ({
   nombre: p.nombre, clases: estado.horarios.filter(h => claveProfesor(h) === (p.id ? String(p.id) : `n:${p.nombre}`)) })));
+
+/* ---------- descargar en Excel / PDF ---------- */
+async function descargar(url, nombreDefecto) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
+    const blob = await r.blob();
+    const m = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : nombreDefecto;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('Descarga lista ✅');
+  } catch (err) { toast(err.message, true); }
+}
+$('#btn-excel-mio').onclick = () => descargar('/api/exportar/excel?alcance=mio', 'mi-horario.xlsx');
+$('#btn-excel-prof').onclick = () => {
+  const p = estado.profesores.find(x => (x.id ? String(x.id) : `n:${x.nombre}`) === profSeleccion);
+  if (p) descargar(`/api/exportar/excel?alcance=profesor&${p.id ? 'id=' + p.id : 'nombre=' + encodeURIComponent(p.nombre)}`, 'horario-profesor.xlsx');
+};
+// Selector de curso para descargar (Todos / uno): lo usan el admin y los alumnos.
+// (los alumnos reciben de la API solo el horario general, sin los horarios personales de los profesores)
+function poblarCursosExport() {
+  const sel = $('#exp-curso');
+  const previo = sel.value;
+  const cursos = [...new Set(estado.horarios.map(h => h.curso).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'es', { numeric: true }));
+  sel.innerHTML = '<option value="">Todos los cursos</option>' + cursos.map(c => `<option value="${esc(c)}">Curso ${esc(c)}</option>`).join('');
+  if (cursos.includes(previo)) sel.value = previo;
+}
+$('#btn-excel-horario').onclick = () => {
+  const c = $('#exp-curso').value;
+  descargar(c ? `/api/exportar/excel?alcance=curso&curso=${encodeURIComponent(c)}` : '/api/exportar/excel?alcance=todo', 'horario.xlsx');
+};
+$('#btn-pdf-horario').onclick = () => {
+  const c = $('#exp-curso').value;
+  const porCurso = (curso) => estado.horarios.filter(h => (h.curso || '') === curso);
+  if (c) return imprimirHorarios([{ nombre: `Curso ${c}`, clases: porCurso(c), conProfesor: true }]);
+  const cursos = [...new Set(estado.horarios.map(h => h.curso).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'es', { numeric: true }));
+  const hojas = cursos.map(k => ({ nombre: `Curso ${k}`, clases: porCurso(k), conProfesor: true }));
+  const sin = estado.horarios.filter(h => !h.curso);
+  if (sin.length) hojas.push({ nombre: 'Clases sin curso asignado', clases: sin, conProfesor: true });
+  imprimirHorarios(hojas);
+};
+
+/* ---------- contraseña ---------- */
+const modalClave = $('#modal-clave');
+$('#btn-clave').onclick = () => { $('#form-clave').reset(); $('#clave-error').textContent = ''; modalClave.showModal(); };
+$('#clave-cancelar').onclick = () => modalClave.close();
+$('#form-clave').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nueva = $('#clave-nueva').value;
+  if (nueva !== $('#clave-repetir').value) { $('#clave-error').textContent = 'Las contraseñas nuevas no coinciden.'; return; }
+  try {
+    await api('/api/auth/password', { method: 'POST', body: { actual: $('#clave-actual').value, nueva } });
+    modalClave.close();
+    toast('Contraseña actualizada ✅');
+  } catch (err) { $('#clave-error').textContent = err.message; }
+});
+$('#btn-reset-clave').onclick = async () => {
+  const p = estado.profesores.find(x => (x.id ? String(x.id) : `n:${x.nombre}`) === profSeleccion);
+  if (!p || !p.id) return;
+  if (!confirm(`¿Restablecer la contraseña de ${p.nombre} a la inicial?`)) return;
+  try {
+    const r = await api('/api/auth/restablecer', { method: 'POST', body: { usuario_id: p.id } });
+    alert(`Listo. La contraseña de ${r.nombre} ahora es: ${r.password}\n\nPedile que la cambie al entrar.`);
+  } catch (err) { toast(err.message, true); }
+};
 
 /* ---------- vista por horas: filas = franjas de la institución, bloques de color ---------- */
 const FRANJAS = [['07:30', '08:15'], ['08:15', '09:00'], ['09:05', '09:50'], ['09:50', '10:35'], ['10:40', '11:25'], ['11:25', '12:10'],
@@ -573,7 +829,7 @@ function tablaHorasHtml(lista, { mostrarProfesor = false } = {}) {
       const { h, i1, i2 } = c;
       const exacto = h.hora_inicio === FRANJAS[i1][0] && h.hora_fin === FRANJAS[i2][1];
       return `<td class="hb" rowspan="${i2 - i1 + 1}" style="background:${colorClase(h)}" title="${esc(h.materia)} · ${esc(h.hora_inicio)}–${esc(h.hora_fin)}">
-        <b>${esc(h.materia)}</b>${exacto ? '' : `<small>${esc(sinCero(h.hora_inicio))} a ${esc(sinCero(h.hora_fin))}</small>`}${mostrarProfesor ? (h.profesor_nombre ? `<small>👤 ${esc(h.profesor_nombre)}</small>` : '') : (h.salon ? `<small>📍 ${esc(h.salon)}</small>` : '')}</td>`;
+        <b>${esc(h.materia)}</b>${h.curso && h.curso !== h.materia ? `<small>🎓 ${esc(h.curso)}</small>` : ''}${exacto ? '' : `<small>${esc(sinCero(h.hora_inicio))} a ${esc(sinCero(h.hora_fin))}</small>`}${mostrarProfesor ? (h.profesor_nombre ? `<small>👤 ${esc(h.profesor_nombre)}</small>` : '') : (h.salon ? `<small>📍 ${esc(h.salon)}</small>` : '')}</td>`;
     }).join('');
     return `<tr${i === n - 1 ? ' class="ultima"' : ''}><th class="franja" style="background:${tinte}">${sinCero(ini)} a ${sinCero(fin)}</th>${tds}</tr>`;
   }).join('');
@@ -621,14 +877,37 @@ $('#contenedor-cambios').addEventListener('click', async (e) => {
 });
 
 /* ============================= avisos y noticias ============================= */
+// Avisos dirigidos: opciones (cursos, turnos, profesores) como casillas debajo de "Dirigido a".
+async function cargarDestinos() {
+  try { estado.destinos = await api('/api/avisos/destinos'); } catch { /* el formulario sigue sirviendo para "Todos" */ }
+  renderDestinoOpciones();
+}
+function renderDestinoOpciones() {
+  const sel = $('#aviso-destino-tipo'), cont = $('#aviso-destino-opciones');
+  if (!sel || !cont) return;
+  const tipo = sel.value, d = estado.destinos;
+  const casilla = (valor, texto) => `<label class="chk"><input type="checkbox" name="destino" value="${esc(valor)}"><span>${esc(texto)}</span></label>`;
+  let html = '';
+  if (tipo === 'cursos') html = d.cursos.length ? d.cursos.map(c => casilla(c, c)).join('') : '<p class="muted">Todavía no hay cursos cargados en el horario.</p>';
+  else if (tipo === 'turno') html = d.turnos.map(t => casilla(t.valor, `${t.nombre} (${t.profesores} profesores)`)).join('');
+  else if (tipo === 'profesores') {
+    const grupo = (titulo, lista) => lista.length ? `<div class="destino-grupo"><b>${titulo}</b>${lista.map(p => casilla(p.nombre, p.nombre + (p.cuenta ? '' : ' · sin cuenta aún'))).join('')}</div>` : '';
+    html = grupo('Turno 1', d.profesores.filter(p => p.turno === 1)) + grupo('Turno 2', d.profesores.filter(p => p.turno === 2)) + grupo('Otros', d.profesores.filter(p => !p.turno));
+  }
+  cont.innerHTML = html;
+  cont.hidden = tipo === 'todos';
+}
+$('#aviso-destino-tipo')?.addEventListener('change', renderDestinoOpciones);
+
 async function cargarFeed(tipo) {
+  if (tipo === 'aviso' && esAdmin()) cargarDestinos();
   const cont = $(tipo === 'aviso' ? '#lista-avisos' : '#lista-noticias');
   try {
     const { avisos } = await api(`/api/avisos?tipo=${tipo}`);
     cont.innerHTML = avisos.length ? avisos.map(a => `
       <article class="feed-item" style="--h:${matiz(a.titulo)}">
         <h4>${esc(a.titulo)}</h4>
-        <small>${esc(a.autor_nombre)} · ${esc(new Date(a.creado_en.replace(' ', 'T') + 'Z').toLocaleDateString('es'))}</small>
+        ${a.para ? `<span class="pill pill-destino">🎯 ${esc(a.para)}</span> ` : ''}<small>${esc(a.autor_nombre)} · ${esc(new Date(a.creado_en.replace(' ', 'T') + 'Z').toLocaleDateString('es'))}</small>
         <p>${esc(a.contenido)}</p>
         ${esAdmin() ? `<div class="clase-acc"><button class="mini peligro" data-del="${a.id}" data-tipo="${tipo}">Eliminar</button></div>` : ''}
       </article>`).join('') : `<div class="vacio"><div class="emoji">${tipo === 'aviso' ? '📭' : '🗞️'}</div><h3>Nada por acá todavía</h3></div>`;
@@ -637,9 +916,18 @@ async function cargarFeed(tipo) {
 $$('.form-publicar').forEach(form => form.addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api('/api/avisos', { method: 'POST', body: { tipo: form.dataset.tipo, titulo: form.titulo.value, contenido: form.contenido.value } });
+    const body = { tipo: form.dataset.tipo, titulo: form.titulo.value, contenido: form.contenido.value };
+    if (form.destino_tipo) {   // solo los avisos se pueden dirigir
+      body.destino_tipo = form.destino_tipo.value;
+      body.destino = $$('input[name="destino"]:checked', form).map(i => i.value);
+      if (body.destino_tipo !== 'todos' && !body.destino.length) return toast('Elegí a quién va dirigido el aviso.', true);
+    }
+    const r = await api('/api/avisos', { method: 'POST', body });
     form.reset();
-    toast('Publicado');
+    renderDestinoOpciones();
+    if (r.destinatarios === undefined) toast('Publicado');
+    else if (r.destinatarios === 0) toast('Publicado, pero todavía ningún profesor con cuenta lo ve (no hay cuenta o nadie coincide).', true);
+    else toast(`Publicado para ${r.destinatarios} profesor${r.destinatarios === 1 ? '' : 'es'}`);
     cargarFeed(form.dataset.tipo);
   } catch (err) { toast(err.message, true); }
 }));
@@ -683,7 +971,7 @@ $('#btn-guardar-asistencia').onclick = () => {
 /* ==================================== chat ==================================== */
 // Markdown mínimo y seguro (se escapa todo el HTML antes): **negrita**, _cursiva_, listas y tablas.
 function inlineMd(t) {
-  return esc(t).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])_(.+?)_(?=[\s).,!?]|$)/g, '$1<em>$2</em>');
+  return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])_(.+?)_(?=[\s).,!?]|$)/g, '$1<em>$2</em>');
 }
 function mdHtml(md) {
   const lineas = String(md).split('\n');
@@ -723,7 +1011,7 @@ function chatBurbuja(cls, { texto, html } = {}) {
 
 function chatAtajos() {
   const base = [['📋 Ver tabla', 'ver tabla'], ['🟢 Disponibilidad', 'disponibilidad'], ['🖼️ Imagen del horario', 'generar imagen del horario'], ['📬 Mis mensajes', 'mis mensajes']];
-  const extra = esProfe() ? [['⭐ Mi horario', 'mi horario'], ['🔁 Cambiar horario', 'cambiar horario']]
+  const extra = esProfe() ? [['📝 Entregar mi horario', 'entregar mi horario'], ['⭐ Mi horario', 'mi horario'], ['🔁 Cambiar horario', 'cambiar horario']]
     : esAdmin() ? [['🚫 Lista negra', 'lista negra'], ['💾 Hacer backup', 'hacer backup']] : [];
   $('#chat-atajos').innerHTML = [...extra, ...base].map(([t, q]) => `<button type="button" class="chip-chat" data-q="${esc(q)}">${esc(t)}</button>`).join('');
 }
@@ -746,6 +1034,11 @@ async function enviarChat(texto) {
     }
     espera.innerHTML = html || '…';
     chatHistorial.push({ rol: 'yo', texto }, { rol: 'bot', texto: respuesta });
+    // Si acaba de entregar el horario, se le desbloquea la app.
+    if (esProfe() && !estado.entrega.entregado) {
+      await cargarEntrega();
+      if (estado.entrega.entregado) { toast('¡Horario entregado! Ya podés usar todo el sistema.'); await cargarHorarios(); }
+    }
   } catch (err) {
     espera.textContent = err.status === 401 ? 'Tu sesión venció. Recargá la página e iniciá sesión de nuevo.' : err.message;
     espera.classList.add('err');
@@ -761,7 +1054,121 @@ $('#chat-form').addEventListener('submit', (e) => {
   const texto = input.value.trim();
   if (!texto) return;
   input.value = '';
+  input.style.height = '';
   enviarChat(texto);
+});
+// Foto de la planilla (solo profesores): se reduce, el servidor la lee con IA y el texto queda en el cuadro para revisarlo antes de enviar.
+$('#btn-foto-horario').onclick = () => {
+  if (esAdmin() && !$('#sel-foto-profe').value) return toast('Primero elegí a qué profesor pertenece la foto.', true);
+  $('#input-foto-horario').click();
+};
+function reducirImagen(archivo) {
+  return new Promise((ok, mal) => {
+    const url = URL.createObjectURL(archivo), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let lado = 1600, calidad = 0.82, data;
+      for (let i = 0; i < 6; i++) {   // el servidor acepta hasta ~1 MB: se achica hasta que entre
+        const k = Math.min(1, lado / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        data = c.toDataURL('image/jpeg', calidad);
+        if (data.length < 900000) return ok(data);
+        lado = Math.round(lado * 0.75); calidad = Math.max(0.5, calidad - 0.08);
+      }
+      mal(new Error('La foto es demasiado pesada.'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); mal(new Error('No pude abrir esa imagen.')); };
+    img.src = url;
+  });
+}
+// OCR en el navegador (Tesseract.js): sin clave ni IA. Lee texto suelto, no entiende la tabla; sirve de borrador.
+async function ocrFoto(dataUrl, aviso) {
+  if (!window.Tesseract) {
+    await new Promise((ok, mal) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+      sc.onload = ok; sc.onerror = () => mal(new Error('No se pudo cargar el lector.'));
+      document.head.appendChild(sc);
+    });
+  }
+  const { data } = await Tesseract.recognize(dataUrl, 'spa', {
+    logger: (m) => { if (m.status === 'recognizing text') aviso.textContent = `📷 Leyendo la foto sin IA… ${Math.round(m.progress * 100)}%`; }
+  });
+  return data.text || '';
+}
+async function leerFoto(archivo) {
+  if (!/^image\//.test(archivo.type)) return toast('Ese archivo no es una imagen.', true);
+  if (esAdmin() && !$('#sel-foto-profe').value) return toast('Primero elegí a qué profesor pertenece la foto.', true);
+  const boton = $('#btn-foto-horario');
+  boton.disabled = true;
+  const profe = esAdmin() ? $('#sel-foto-profe').value : '';
+  const espera = chatBurbuja('bot', { texto: profe ? `📷 Leyendo la foto del horario de ${profe}…` : '📷 Leyendo la foto de tu horario…' });
+  let imagen;
+  try {
+    imagen = await reducirImagen(archivo);
+    const miniatura = chatBurbuja('yo', { html: `<img class="chat-img" alt="Foto del horario" src="${imagen}">` });   // la imagen sale de nuestro canvas: es segura
+    chatCaja().insertBefore(miniatura, espera);
+    // El servidor guarda la foto (el admin la ve en "Por profesor") y, si la lectura es limpia, la pasa a clases.
+    const r = await api('/api/chatbot/foto', { method: 'POST', body: { imagen, profesor: profe || undefined } });
+    const de = profe || 'tu horario';
+    if (r.estado === 'entregado') {
+      espera.innerHTML = mdHtml(profe
+        ? `✅ Leí la foto y cargué el horario de **${profe}** (${r.total} clase${r.total === 1 ? '' : 's'}). Ya está en **Por profesor**.`
+        : `✅ Leí la foto y entregué tu horario a la administración (${r.total} clase${r.total === 1 ? '' : 's'}). Ya aparece en su sección **Por profesor**. Escribí **ver mi horario entregado** para revisarlo.`);
+    } else {
+      let crudo = r.texto || '';
+      if (!crudo && !r.con_ia) {   // sin IA: se intenta leer el texto en el navegador (Tesseract) solo como borrador
+        espera.textContent = '📷 Foto recibida. Intentando leer el texto sin IA (puede tardar un poco la primera vez)…';
+        try { crudo = await ocrFoto(imagen, espera); } catch (_) { /* sin conexión al lector: queda la foto */ }
+      }
+      espera.innerHTML = mdHtml(`📷 **Recibí la foto de ${profe ? 'el horario de ' + profe : 'tu horario'} y ya se la pasé a la administración**: la ve en **Por profesor**.` +
+        (profe ? '' : ' Ya podés usar todo el sistema.') +
+        (crudo.trim() ? `\n\nPara que quede cargado en clases revisá el texto de abajo (una clase por línea, ej. \`Lunes 07:30-09:00 3°MA liceo\`; corregí lo marcado con "?") y tocá Enviar.`
+                      : `\n\nNo pude leer las clases de la foto: la administración las pasa a mano, o escribí tu horario acá en el chat.`));
+      if (crudo.trim()) {
+        const input = $('#chat-input');
+        input.value = (profe ? `Cargar horario de ${profe}:\n` : '') + crudo.trim() + '\n';
+        input.dispatchEvent(new Event('input'));
+        input.focus();
+      }
+    }
+    if (esProfe() && !estado.entrega.entregado) {
+      await cargarEntrega();
+      if (estado.entrega.entregado) { toast('¡Horario entregado! Ya podés usar todo el sistema.'); await cargarHorarios(); }
+    }
+    if (esAdmin()) { await cargarEntrega(); await cargarHorarios(); }
+  } catch (err) {
+    espera.textContent = err.status === 401 ? 'Tu sesión venció. Recargá la página e iniciá sesión de nuevo.' : err.message;
+    espera.classList.add('err');
+  }
+  finally { boton.disabled = false; chatCaja().scrollTop = chatCaja().scrollHeight; }
+}
+$('#input-foto-horario').addEventListener('change', (e) => {
+  const archivo = e.target.files[0];
+  e.target.value = '';
+  if (archivo) leerFoto(archivo);
+});
+// También se puede pegar (Ctrl+V) o arrastrar la foto al chat.
+const imagenDe = (lista) => [...(lista || [])].find(f => /^image\//.test(f.type));
+$('#chat-input').addEventListener('paste', (e) => {
+  const f = imagenDe(e.clipboardData && e.clipboardData.files);
+  if (f && !$('#btn-foto-horario').hidden) { e.preventDefault(); leerFoto(f); }
+});
+$('.chat-box').addEventListener('dragover', (e) => e.preventDefault());
+$('.chat-box').addEventListener('drop', (e) => {
+  e.preventDefault();
+  const f = imagenDe(e.dataTransfer && e.dataTransfer.files);
+  if (f && !$('#btn-foto-horario').hidden) leerFoto(f);
+});
+// El cuadro de texto admite varias líneas (para pegar el horario semanal): Enter envía, Shift+Enter baja de línea.
+$('#chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#chat-form').requestSubmit(); }
+});
+$('#chat-input').addEventListener('input', (e) => {
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 220) + 'px';
 });
 
 /* ================================== backup (solo admin) ================================== */
@@ -774,7 +1181,8 @@ async function cargarBackups() {
     cont.innerHTML = backups.length
       ? `<table class="preview-tabla"><thead><tr><th>Archivo</th><th>Tipo</th><th>Fecha</th><th>Tamaño</th><th></th></tr></thead><tbody>
          ${backups.map(b => `<tr><td>${esc(b.nombre)}</td><td>${esc(b.tipo)}</td><td>${esc(new Date(b.creado).toLocaleString('es'))}</td><td>${tamanoLegible(b.tamano)}</td>
-           <td class="acciones-backup"><a class="mini" href="/api/backup/${encodeURIComponent(b.nombre)}/descargar">Descargar</a>
+           <td class="acciones-backup"><a class="mini" href="/api/backup/${encodeURIComponent(b.nombre)}/descargar">Descargar .db</a>
+           <a class="mini" href="/api/backup/${encodeURIComponent(b.nombre)}/pdf">📄 PDF</a>
            <button class="mini" data-bk="restaurar" data-n="${esc(b.nombre)}">Restaurar</button>
            <button class="mini peligro" data-bk="borrar" data-n="${esc(b.nombre)}">Eliminar</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="muted">Todavía no hay backups. Creá el primero con el botón de arriba.</p>';

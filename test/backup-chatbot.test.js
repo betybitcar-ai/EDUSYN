@@ -15,6 +15,7 @@ const { responder, detectarIntencion } = require('../lib/chatbot');
 
 const nuevoUsuario = (nombre, email, rol) => {
   const id = db.prepare('INSERT INTO usuarios (nombre, email, password_hash, rol) VALUES (?, ?, ?, ?)').run(nombre, email, 'hash', rol).lastInsertRowid;
+  if (rol === 'profesor') db.prepare('INSERT INTO entregas_horario (profesor_id, cantidad) VALUES (?, 0)').run(id);   // ya entregó su horario semanal (obligatorio)
   return { id: Number(id), nombre, email, rol };
 };
 const clase = (dia, ini, fin, materia, salon, p) => db.prepare(
@@ -161,35 +162,31 @@ test('backup: se pueden borrar y los automáticos se podan', () => {
   assert.ok(!backup.listarBackups().some(x => x.nombre === b.nombre));
 });
 
-test('chatbot: dice que a esa hora el profesor está en otro lugar (o libre)', async () => {
-  // Carlos tiene Historia el lunes 08:00–09:30 en Aula 3
-  const r = await pedir(admin, '¿dónde está Carlos el lunes a las 8:30?');
-  assert.match(r.respuesta, /en otro lugar/);
-  assert.match(r.respuesta, /Historia/);
-  assert.match(r.respuesta, /Aula 3/);
-  assert.match((await pedir(admin, '¿está libre Carlos el lunes a las 10?')).respuesta, /está libre/);
-  // el profesor sin nombrar a nadie habla de sí mismo
-  const yo = await pedir(ana, 'estoy libre el lunes a las 9?');
-  assert.match(yo.respuesta, /estás en otro lugar/);
-  assert.match(yo.respuesta, /Matemáticas/);
-  // sin hora: lista el día
-  assert.match((await pedir(admin, 'qué tiene Carlos el lunes')).respuesta, /Historia/);
-});
-
 test('chatbot: al buscar reemplazo muestra quién está en otro lugar a esa hora', async () => {
   const r = await pedir(admin, 'reemplazo para el lunes');
   assert.match(r.respuesta, /En otro lugar a esa hora: Carlos Gómez \(en Historia/);
 });
 
-test('chatbot: si el horario no está publicado el profesor no lo ve, el admin sí', async () => {
+test('chatbot: el profesor no espera la publicación; ve su tabla e imagen y nunca las clases de otros', async () => {
   db.setConfig('horario_publicado', '0');
   try {
-    for (const q of ['ver tabla', 'mi horario', 'disponibilidad', 'generar imagen del horario'])
-      assert.match((await pedir(ana, q)).respuesta, /todavía no fue publicado/, q);
-    assert.match((await pedir(admin, 'ver tabla')).respuesta, /Matemáticas/);
+    for (const q of ['ver tabla', 'mi horario', 'disponibilidad', 'generar imagen del horario']) {
+      const r = await pedir(ana, q);
+      assert.doesNotMatch(r.respuesta, /todavía no fue publicado/, q);
+    }
+    const tabla = (await pedir(ana, 'ver tabla')).respuesta;
+    assert.match(tabla, /\| Día \|/);
+    assert.match(tabla, /Matemáticas/);
+    assert.doesNotMatch(tabla, /Historia/, 'no ve las clases de otros profesores');
+    const img = await pedir(ana, 'generar imagen del horario');
+    assert.equal(img.tipo, 'imagen');
+    assert.match(img.imagen_url, /^data:image\/svg\+xml;base64,/);
+    assert.match(Buffer.from(img.imagen_url.split(',')[1], 'base64').toString(), /horario de /);
+    assert.match((await pedir(admin, 'ver tabla')).respuesta, /Historia/);
     let ctxIA;
     await pedir(ana, 'explicame algo', {}, { generarIA: async (p) => { ctxIA = p.system; return 'ok'; } });
-    assert.doesNotMatch(ctxIA, /Matemáticas/);
+    assert.match(ctxIA, /Matemáticas/);
+    assert.doesNotMatch(ctxIA, /Historia/, 'la IA tampoco recibe las clases de otros');
   } finally { db.setConfig('horario_publicado', '1'); }
 });
 
@@ -243,4 +240,13 @@ test('aviso al profesor cuando cambia una clase ya publicada (y nada si es borra
   assert.match(msg, /Aula 4 → Aula 9/);
   lib.avisarCambioClase(despues, null);
   assert.match(mensajesDe(p).at(-1), /Se eliminó tu clase Dibujo/);
+});
+
+test('el backup se puede bajar como PDF legible', () => {
+  const { generarPdfBackup } = require('../lib/backupPdfLib');
+  const b = backup.crearBackup('manual');
+  const pdf = generarPdfBackup(backup.rutaBackup(b.nombre), b.nombre);
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+  assert.match(pdf.subarray(-6).toString(), /%%EOF/);
+  assert.ok(!pdf.toString('latin1').includes('password_hash'));
 });

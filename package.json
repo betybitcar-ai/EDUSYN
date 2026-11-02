@@ -9,9 +9,10 @@
     "seed": "node db/seed.js",
     "cargar-profesores": "node db/cargarProfesores.js",
     "cargar-saul": "node db/cargarSaul.js",
+    "cargar-valentina": "node db/cargarValentina.js",
     "cargar-silvio": "node db/cargarSilvio.js",
     "generar-claves": "node scripts/generarClaves.js",
-    "test": "node --test test/flujo.test.js test/backup-chatbot.test.js test/vinculo.test.js test/silvio.test.js test/seguridad.test.js test/extras.test.js"
+    "test": "node --test test/flujo.test.js test/backup-chatbot.test.js test/vinculo.test.js test/silvio.test.js test/seguridad.test.js test/extras.test.js test/curso-clave.test.js test/entrega-horario.test.js test/choques.test.js test/avisos-dirigidos.test.js test/clima.test.js test/foto-entrega.test.js"
   },
   "engines": { "node": ">=22.5.0" },
   "dependencies": {

@@ -4,6 +4,8 @@ const db = require('../db/database');
 const { vincularBloquesPorNombre } = require('../lib/horariosLib');
 
 const { crearLimitador } = require('../lib/seguridad');
+const { requireAuth, requireRole } = require('../middleware/auth');
+const historial = require('../lib/historialLib');
 
 const router = express.Router();
 
@@ -78,6 +80,47 @@ router.post('/login', async (req, res) => {
     console.error('login', e);
     res.status(500).json({ error: 'Error interno del servidor.' });
   }
+});
+
+// Cada persona cambia su propia contraseña (pide la actual).
+router.post('/password', requireAuth, async (req, res) => {
+  try {
+    const { actual, nueva } = req.body || {};
+    if (typeof actual !== 'string' || typeof nueva !== 'string' || !actual || !nueva) return res.status(400).json({ error: 'Completá la contraseña actual y la nueva.' });
+    if (nueva.length < 8) return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 8 caracteres.' });
+    if (nueva.length > 100) return res.status(400).json({ error: 'La nueva contraseña es demasiado larga.' });
+    const clave = `pw|${req.session.user.id}|${req.ip}`;
+    const espera = limiteLogin.bloqueado(clave);
+    if (espera) return res.status(429).json({ error: esperar(espera) });
+    const u = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(req.session.user.id);
+    if (!u || !(await bcrypt.compare(actual, u.password_hash))) {
+      limiteLogin.fallo(clave);
+      return res.status(401).json({ error: 'La contraseña actual no es correcta.' });
+    }
+    if (nueva === actual) return res.status(400).json({ error: 'La nueva contraseña tiene que ser distinta de la actual.' });
+    if (nueva === require('../lib/cuentasProfesores').passwordInicial()) return res.status(400).json({ error: 'Elegí una contraseña distinta de la inicial.' });
+    limiteLogin.exito(clave);
+    db.prepare('UPDATE usuarios SET password_hash = ? WHERE id = ?').run(await bcrypt.hash(nueva, 10), u.id);
+    historial.registrar(req.session.user, 'clave', 'Cambió su contraseña');
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('password', e);
+    res.status(500).json({ error: 'Error interno del servidor.' });
+  }
+});
+
+// El admin devuelve la contraseña inicial a un profesor que la olvidó.
+router.post('/restablecer', requireRole('admin'), (req, res) => {
+  const id = Number((req.body || {}).usuario_id);
+  const p = id ? db.prepare("SELECT id, nombre FROM usuarios WHERE id = ? AND rol = 'profesor'").get(id) : null;
+  if (!p) return res.status(404).json({ error: 'Profesor no encontrado (solo se restablecen cuentas de profesores).' });
+  const inicial = require('../lib/cuentasProfesores').passwordInicial();
+  db.prepare('UPDATE usuarios SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(inicial, 10), p.id);
+  db.prepare(`INSERT INTO mensajes (remitente_id, remitente_nombre, destinatario_id, destinatario_nombre, contenido, tipo)
+              VALUES (NULL, 'Sistema Cuadrilla', ?, ?, ?, 'sistema')`)
+    .run(p.id, p.nombre, 'La administración restableció tu contraseña a la inicial. Cambiala desde “Cambiar contraseña” en el menú.');
+  historial.registrar(req.session.user, 'clave', `Restableció la contraseña de ${p.nombre}`);
+  res.json({ ok: true, nombre: p.nombre, password: inicial });
 });
 
 router.post('/logout', (req, res) => {

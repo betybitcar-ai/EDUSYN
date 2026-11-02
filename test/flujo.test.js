@@ -79,17 +79,17 @@ test('el admin crea clases, asigna profesor y detecta choques', async () => {
   const anaId = conCuenta[0].id;
 
   const nueva = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Miércoles', hora_inicio: '10:00', hora_fin: '11:30', materia: 'Arte', salon: 'Taller 1', profesor_id: anaId } });
+    body: { curso: '7°1', dia: 'Miércoles', hora_inicio: '10:00', hora_fin: '11:30', materia: 'Arte', salon: 'Taller 1', profesor_id: anaId } });
   assert.equal(nueva.status, 201);
   assert.equal(nueva.data.horario.profesor_nombre, 'Ana Pérez');
 
   // Mismo profesor, horas que se pisan
   const choque = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Miércoles', hora_inicio: '11:00', hora_fin: '12:00', materia: 'Otra', salon: 'Aula 9', profesor_id: anaId } });
+    body: { curso: '7°1', dia: 'Miércoles', hora_inicio: '11:00', hora_fin: '12:00', materia: 'Otra', salon: 'Aula 9', profesor_id: anaId } });
   assert.equal(choque.status, 409);
   // Horas inválidas
   const mala = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Lunes', hora_inicio: '12:00', hora_fin: '11:00', materia: 'X' } });
+    body: { curso: '7°1', dia: 'Lunes', hora_inicio: '12:00', hora_fin: '11:00', materia: 'X' } });
   assert.equal(mala.status, 400);
   // Un alumno no puede crear
   assert.equal((await pedir('/api/horarios', { method: 'POST', cookie: alumno.cookie,
@@ -101,25 +101,25 @@ test('el alumno solo ve el horario cuando se publica', async () => {
   assert.equal(r.data.publicado, false);
   assert.equal(r.data.horarios.length, 0);
 
-  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: alumno.cookie, body: { publicado: true } })).status, 403);
-  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { publicado: true } })).status, 200);
+  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: alumno.cookie, body: { curso: '7°1', publicado: true } })).status, 403);
+  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '7°1', publicado: true } })).status, 200);
 
   r = await pedir('/api/horarios', { cookie: alumno.cookie });
   assert.equal(r.data.publicado, true);
   assert.equal(r.data.horarios.length, 1);
 
-  await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { publicado: false } });
+  await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '7°1', publicado: false } });
   r = await pedir('/api/horarios', { cookie: alumno.cookie });
   assert.equal(r.data.horarios.length, 0);
 });
 
-test('el profesor ve su propio horario en /mios solo cuando el admin lo publica', async () => {
+test('el profesor ve su propio horario en /mios sin esperar a que el admin publique', async () => {
   let borrador = await pedir('/api/horarios/mios', { cookie: ana.cookie });
-  assert.equal(borrador.data.horarios.length, 0, 'en borrador el profesor no ve nada');
-  assert.equal((await pedir('/api/horarios', { cookie: ana.cookie })).data.horarios.length, 0);
+  assert.deepEqual(borrador.data.horarios.map(h => h.materia), ['Arte'], 'en borrador el profesor ve sus clases igual');
+  assert.deepEqual((await pedir('/api/horarios', { cookie: ana.cookie })).data.horarios.map(h => h.materia), ['Arte'], 'y solo las suyas');
   assert.ok((await pedir('/api/horarios', { cookie: admin.cookie })).data.horarios.length > 0, 'el admin sí ve el borrador');
 
-  const pub = await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { publicado: true } });
+  const pub = await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '7°1', publicado: true } });
   assert.equal(pub.status, 200);
   assert.ok(pub.data.profesores_avisados >= 1);
   const aviso = await pedir('/api/mensajes', { cookie: ana.cookie });
@@ -239,20 +239,62 @@ test('chatbot: solo profesores y admin; responde sin IA y valida el mensaje', as
 
 test('el admin asigna una clase a un profesor de la plantilla que todavía no tiene cuenta', async () => {
   const nueva = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Viernes', hora_inicio: '08:00', hora_fin: '09:00', materia: 'Química', profesor_nombre: 'Mauro Ipar' } });
+    body: { curso: '9°2', dia: 'Viernes', hora_inicio: '08:00', hora_fin: '09:00', materia: 'Química', profesor_nombre: 'Mauro Ipar' } });
   assert.equal(nueva.status, 201, JSON.stringify(nueva.data));
   assert.equal(nueva.data.horario.profesor_nombre, 'Mauro Ipar');
   assert.equal(nueva.data.horario.profesor_id, null);
   // mismo profesor, mismas horas: choque
   const choque = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Viernes', hora_inicio: '08:30', hora_fin: '09:30', materia: 'Otra', profesor_nombre: 'Mauro Ipar' } });
+    body: { curso: '9°2', dia: 'Viernes', hora_inicio: '08:30', hora_fin: '09:30', materia: 'Otra', profesor_nombre: 'Mauro Ipar' } });
   assert.equal(choque.status, 409);
   // alguien fuera de la plantilla y sin cuenta no se acepta
   const raro = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie,
-    body: { dia: 'Viernes', hora_inicio: '10:00', hora_fin: '11:00', materia: 'X', profesor_nombre: 'Persona Inventada' } });
+    body: { curso: '9°2', dia: 'Viernes', hora_inicio: '10:00', hora_fin: '11:00', materia: 'X', profesor_nombre: 'Persona Inventada' } });
   assert.equal(raro.status, 400);
   // cuando Mauro se registra, la clase le aparece
   const mauro = await registrar('Mauro Ipar', 'mauro@a.com', 'profesor', 'PROFE-2026');
   const mias = await pedir('/api/horarios/mios', { cookie: mauro.cookie });
   assert.deepEqual(mias.data.horarios.map(h => h.materia), ['Química']);
+});
+
+test('cada curso tiene su propio horario: se publican por separado y una clase no cambia de curso', async () => {
+  const cls = (curso, materia, hora) => ({ curso, dia: 'Martes', hora_inicio: hora, hora_fin: hora.replace(/^(\d\d)/, (h) => String(Number(h) + 1).padStart(2, '0')), materia, salon: `Aula ${materia}` });
+  const mf = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie, body: cls('3°MF', 'Física', '08:00') });
+  const ma = await pedir('/api/horarios', { method: 'POST', cookie: admin.cookie, body: cls('3°MA', 'Álgebra', '10:00') });
+  assert.equal(mf.status, 201); assert.equal(ma.status, 201);
+
+  // Los dos cursos existen y arrancan en borrador
+  const lista = await pedir('/api/horarios/cursos', { cookie: admin.cookie });
+  const estadoDe = (c) => lista.data.cursos.find(x => x.curso === c);
+  assert.equal(estadoDe('3°MF').publicado, false);
+  assert.equal(estadoDe('3°MA').publicado, false);
+
+  // Publicar es por curso: hay que decir cuál, y publicar uno no publica el otro
+  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { publicado: true } })).status, 400);
+  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '3°MF', publicado: true } })).status, 200);
+  const vistoAlumno = (await pedir('/api/horarios', { cookie: alumno.cookie })).data.horarios.map(h => h.materia);
+  assert.ok(vistoAlumno.includes('Física'), 'el curso publicado se ve');
+  assert.ok(!vistoAlumno.includes('Álgebra'), 'el curso en borrador no se ve');
+
+  // Volver un curso a borrador no toca a los demás
+  await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '3°MA', publicado: true } });
+  await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '3°MF', publicado: false } });
+  const despues = (await pedir('/api/horarios', { cookie: alumno.cookie })).data.horarios.map(h => h.materia);
+  assert.ok(despues.includes('Álgebra') && !despues.includes('Física'));
+
+  // Una clase no se pasa a otro curso (se elimina y se crea en el otro horario)
+  const mover = await pedir(`/api/horarios/${mf.data.horario.id}`, { method: 'PUT', cookie: admin.cookie, body: { curso: '3°MA' } });
+  assert.equal(mover.status, 400);
+  assert.match(mover.data.error, /3°MF/);
+  const igual = await pedir(`/api/horarios/${mf.data.horario.id}`, { method: 'PUT', cookie: admin.cookie, body: { materia: 'Física 2' } });
+  assert.equal(igual.status, 200);
+  assert.equal(igual.data.horario.curso, '3°MF');
+
+  // Cursos nuevos: se abren vacíos en borrador, no se repiten y no se pueden publicar sin clases
+  assert.equal((await pedir('/api/horarios/cursos', { method: 'POST', cookie: admin.cookie, body: { curso: '3°ZZ' } })).status, 201);
+  assert.equal((await pedir('/api/horarios/cursos', { method: 'POST', cookie: admin.cookie, body: { curso: '3°zz' } })).status, 409);
+  assert.equal((await pedir('/api/horarios/publicar', { method: 'POST', cookie: admin.cookie, body: { curso: '3°ZZ', publicado: true } })).status, 400);
+  assert.equal((await pedir('/api/horarios/cursos', { method: 'POST', cookie: alumno.cookie, body: { curso: '1°A' } })).status, 403);
+  assert.equal((await pedir(`/api/horarios/cursos/${encodeURIComponent('3°MA')}`, { method: 'DELETE', cookie: admin.cookie })).status, 409, 'un curso con clases no se quita');
+  assert.equal((await pedir(`/api/horarios/cursos/${encodeURIComponent('3°ZZ')}`, { method: 'DELETE', cookie: admin.cookie })).status, 200);
 });

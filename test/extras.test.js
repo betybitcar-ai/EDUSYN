@@ -18,6 +18,7 @@ const { responder, detectarIntencion } = require('../lib/chatbot');
 
 const usuario = (nombre, rol) => {
   const id = Number(db.prepare('INSERT INTO usuarios (nombre, email, password_hash, rol) VALUES (?, ?, ?, ?)').run(nombre, nombre.replace(/\W/g, '') + '@t.com', 'h', rol).lastInsertRowid);
+  if (rol === 'profesor') db.prepare('INSERT INTO entregas_horario (profesor_id, cantidad) VALUES (?, 0)').run(id);   // ya entregó su horario semanal (obligatorio)
   return { id, nombre, rol };
 };
 const clase = (dia, ini, fin, materia, salon, p) => Number(db.prepare(
@@ -93,7 +94,7 @@ test('chatbot: salones libres y ocupados, o el estado de un salón puntual', asy
   assert.match((await pedir(admin, 'está libre el aula 101 el lunes a las 12?')).respuesta, /libre el Lunes a las 12:00/);
   assert.match((await pedir(admin, 'salones libres el lunes')).respuesta, /a qué hora/);
   db.setConfig('horario_publicado', '0');
-  assert.match((await pedir(ana, 'salones libres el lunes a las 9')).respuesta, /todavía no fue publicado/);
+  assert.match((await pedir(ana, 'salones libres el lunes a las 9')).respuesta, /Salones el Lunes a las 09:00/, 'el profesor no espera la publicación');
   db.setConfig('horario_publicado', '1');
 });
 

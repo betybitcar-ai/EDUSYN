@@ -12,4 +12,10 @@ router.get('/', requireRole('admin'), (req, res) => {
   });
 });
 
+// DELETE /api/historial - el administrador borra todo el historial (queda un único registro que lo indica)
+router.delete('/', requireRole('admin'), (req, res) => {
+  const { borrados } = historial.vaciar(req.session.user);
+  res.json({ borrados });
+});
+
 module.exports = router;

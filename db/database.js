@@ -114,15 +114,60 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_historial_fecha ON historial (fecha DESC, id DESC);
 `);
 
+// Entrega obligatoria del horario semanal: cada profesor debe pasarlo (por el asistente) y queda registrado acá.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS entregas_horario (
+    profesor_id INTEGER PRIMARY KEY,
+    enviado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    cantidad INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (profesor_id) REFERENCES usuarios(id) ON DELETE CASCADE
+  );
+`);
+
+// Foto del horario que el profesor (o el admin en su nombre) subió al asistente. El admin la ve en "Por profesor".
+db.exec(`
+  CREATE TABLE IF NOT EXISTS entregas_foto (
+    profesor_id INTEGER PRIMARY KEY,
+    imagen TEXT NOT NULL,
+    enviado_en TEXT NOT NULL DEFAULT (datetime('now')),
+    subido_por TEXT,
+    FOREIGN KEY (profesor_id) REFERENCES usuarios(id) ON DELETE CASCADE
+  );
+`);
+
 // Migración: color opcional de cada clase (amarillo / azul / verde) para la vista por horas.
 if (!db.prepare('PRAGMA table_info(horarios)').all().some(c => c.name === 'color')) {
   db.exec('ALTER TABLE horarios ADD COLUMN color TEXT');
+}
+
+// Migración: curso al que pertenece cada clase (7°3, 3°CAD…). El admin lo indica al crear el horario.
+if (!db.prepare('PRAGMA table_info(horarios)').all().some(c => c.name === 'curso')) {
+  db.exec('ALTER TABLE horarios ADD COLUMN curso TEXT');
+  // En los horarios cargados desde planillas (Silvio, Saúl) la "materia" ya era el grupo: se copia como curso.
+  db.exec("UPDATE horarios SET curso = materia WHERE curso IS NULL AND origen LIKE 'carga-%' AND materia GLOB '[0-9]°*'");
+}
+
+// Migración: avisos dirigidos. destino_tipo = todos | cursos | turno | profesores; destino = lista JSON de cursos, turnos o nombres.
+if (!db.prepare('PRAGMA table_info(avisos)').all().some(c => c.name === 'destino_tipo')) {
+  db.exec("ALTER TABLE avisos ADD COLUMN destino_tipo TEXT NOT NULL DEFAULT 'todos'");
+  db.exec('ALTER TABLE avisos ADD COLUMN destino TEXT');
 }
 
 // Migración: cada solicitud emparejada apunta a la de su pareja (el admin aprueba el intercambio).
 if (!db.prepare('PRAGMA table_info(solicitudes_cambio)').all().some(c => c.name === 'pareja_id')) {
   db.exec('ALTER TABLE solicitudes_cambio ADD COLUMN pareja_id INTEGER');
 }
+
+// Horario separado por curso: cada curso (3°MF, 7°3…) tiene su propio horario con su propio estado
+// (borrador / publicado). Una fila por curso; si un curso no tiene fila, cuenta como borrador.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cursos_horario (
+    curso TEXT PRIMARY KEY COLLATE NOCASE,
+    publicado INTEGER NOT NULL DEFAULT 0,
+    publicado_en TEXT,
+    creado_en TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
 
 function getConfig(clave, defecto = null) {
   const fila = db.prepare('SELECT valor FROM config WHERE clave = ?').get(clave);
@@ -131,6 +176,19 @@ function getConfig(clave, defecto = null) {
 function setConfig(clave, valor) {
   db.prepare(`INSERT INTO config (clave, valor) VALUES (?, ?)
               ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor`).run(clave, String(valor));
+}
+
+// Migración (una sola vez): el estado global "publicado" pasa a cada curso que ya existe.
+// El interruptor global queda en 0; solo sirve de valor por defecto para cursos sin fila (compatibilidad).
+if (getConfig('cursos_migrados_v1') !== '1') {
+  const global = getConfig('horario_publicado', '0') === '1';
+  const cuando = getConfig('horario_publicado_en');
+  const cursos = db.prepare(`SELECT DISTINCT TRIM(curso) AS curso FROM horarios
+                             WHERE curso IS NOT NULL AND TRIM(curso) <> '' AND origen NOT LIKE 'carga-%'`).all();
+  const ins = db.prepare('INSERT OR IGNORE INTO cursos_horario (curso, publicado, publicado_en) VALUES (?, ?, ?)');
+  for (const c of cursos) ins.run(c.curso, global ? 1 : 0, global ? cuando : null);
+  setConfig('horario_publicado', '0');
+  setConfig('cursos_migrados_v1', '1');
 }
 
 module.exports = db;

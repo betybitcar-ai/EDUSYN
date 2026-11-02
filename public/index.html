@@ -54,29 +54,39 @@
     <aside class="sidebar">
       <div class="sidebar-brand"><img src="logo.png" alt="" class="logo-sidebar"><span>Cuadrilla</span></div>
       <nav class="sidebar-nav" id="sidebar-nav">
-        <button class="nav-item is-active" data-vista="horarios"><span class="ico">🗓️</span><span id="nav-horarios-txt">Horario</span></button>
+        <button class="nav-item is-active" data-vista="horarios" data-roles="admin,alumno"><span class="ico">🗓️</span><span id="nav-horarios-txt">Horario</span></button>
         <button class="nav-item" data-vista="mi-horario" data-roles="profesor"><span class="ico">⭐</span>Mi horario</button>
-        <button class="nav-item" data-vista="profesores" data-roles="admin"><span class="ico">👥</span>Por profesor</button>
+        <button class="nav-item" data-vista="profesores" data-roles="admin"><span class="ico">👥</span>Por profesor<span class="badge" id="badge-choques" hidden title="Diferencias entre lo que entregaron los profesores y la grilla"></span></button>
         <button class="nav-item" data-vista="salones" data-roles="admin"><span class="ico">🏫</span>Por salón</button>
         <button class="nav-item" data-vista="cambios" data-roles="admin"><span class="ico">🔁</span>Cambios<span class="badge" id="badge-cambios" hidden></span></button>
         <button class="nav-item" data-vista="asistencias" data-roles="profesor,admin"><span class="ico">✅</span>Asistencias</button>
         <button class="nav-item" data-vista="avisos"><span class="ico">📣</span>Avisos</button>
         <button class="nav-item" data-vista="noticias"><span class="ico">📰</span>Noticias</button>
+        <button class="nav-item" data-vista="mapa3d"><span class="ico">🧭</span>Mapa 3D</button>
+        <button class="nav-item" data-vista="clima"><span class="ico">🌦️</span>Clima</button>
         <button class="nav-item" data-vista="chat" data-roles="profesor,admin"><span class="ico">💬</span>Asistente</button>
         <button class="nav-item" data-vista="lista-negra" data-roles="admin"><span class="ico">🚫</span>Lista negra</button>
         <button class="nav-item" data-vista="historial" data-roles="admin"><span class="ico">📜</span>Historial</button>
         <button class="nav-item" data-vista="backup" data-roles="admin"><span class="ico">💾</span>Backup</button>
       </nav>
+      <button type="button" class="clima-mini" id="clima-mini" title="Ver el clima de Artigas" aria-label="Clima en Artigas">
+        <span class="clima-mini-ico" id="clima-mini-ico">🌡️</span>
+        <span class="clima-mini-txt"><b id="clima-mini-temp">--°</b><span id="clima-mini-desc">Artigas</span></span>
+      </button>
       <div class="sidebar-user">
         <div class="user-chip">
           <span class="user-avatar" id="user-avatar">?</span>
           <span class="user-info"><span class="user-nombre" id="user-nombre"></span><span class="user-rol" id="user-rol"></span></span>
         </div>
+        <button id="btn-clave" class="btn btn-secondary btn-block" type="button">🔑 Cambiar contraseña</button>
         <button id="btn-salir" class="btn btn-danger btn-block" type="button">Cerrar sesión</button>
       </div>
     </aside>
 
     <main class="main-area">
+      <div id="aviso-entrega" class="aviso-entrega pendiente aviso-entrega-fijo" hidden>
+        📝 <b>Tenés que entregar tu horario semanal.</b> Es obligatorio: escribilo en el Asistente (una clase por línea: día, hora, curso y lugar) y se lo envío a la administración. Hasta entonces el resto del sistema está bloqueado.
+      </div>
 
       <!-- HORARIO GENERAL -->
       <section id="vista-horarios" class="vista is-active">
@@ -91,8 +101,20 @@
           </div>
         </header>
 
+        <!-- Un horario por curso: cada pestaña es un horario aparte, con su propio borrador / publicación -->
+        <div class="cursos-barra">
+          <div id="cursos-tabs" class="cursos-tabs" role="tablist" aria-label="Cursos"></div>
+          <button id="btn-nuevo-curso" class="btn btn-secondary admin-only" type="button" hidden>+ Nuevo curso</button>
+          <button id="btn-quitar-curso" class="btn btn-ghost admin-only" type="button" hidden>🗑️ Quitar curso vacío</button>
+        </div>
+
         <div class="toolbar">
           <input type="search" id="filtro-horarios" placeholder="Buscar materia, profesor o salón…" aria-label="Buscar">
+          <div class="descargas" id="descargas-horario" hidden>
+            <select id="exp-curso" aria-label="Curso a descargar"></select>
+            <button type="button" class="btn btn-secondary" id="btn-excel-horario">⬇️ Excel</button>
+            <button type="button" class="btn btn-secondary" id="btn-pdf-horario">🖨️ PDF</button>
+          </div>
           <div class="leyenda" id="leyenda"></div>
         </div>
 
@@ -105,6 +127,7 @@
           <div><h2>Mi horario</h2><p class="sub" id="mi-resumen"></p></div>
           <div class="acciones vista-toggle" id="mi-vista-toggle" role="group" aria-label="Forma de ver el horario">
             <button type="button" class="btn btn-secondary" id="btn-imprimir-mio">🖨️ Imprimir / PDF</button>
+            <button type="button" class="btn btn-secondary" id="btn-excel-mio">⬇️ Excel</button>
             <button type="button" class="btn btn-secondary is-on" data-v="horas">🕒 Por horas</button>
             <button type="button" class="btn btn-secondary" data-v="dias">🗓️ Por días</button>
           </div>
@@ -120,12 +143,17 @@
           <div><h2>Horario por profesor</h2><p class="sub" id="prof-resumen">Elegí un profesor para ver su horario tal como lo va a ver él.</p></div>
           <div class="acciones vista-toggle" id="prof-vista-toggle" role="group" aria-label="Forma de ver el horario">
             <button type="button" class="btn btn-secondary" id="btn-imprimir-prof">🖨️ Imprimir / PDF</button>
+            <button type="button" class="btn btn-secondary" id="btn-excel-prof">⬇️ Excel</button>
+            <button type="button" class="btn btn-secondary" id="btn-reset-clave">🔑 Restablecer contraseña</button>
             <button type="button" class="btn btn-secondary" id="btn-imprimir-todos">🖨️ Todos los profesores</button>
             <button type="button" class="btn btn-secondary is-on" data-v="horas">🕒 Por horas</button>
             <button type="button" class="btn btn-secondary" data-v="dias">🗓️ Por días</button>
           </div>
         </header>
         <div class="toolbar"><select id="prof-select" aria-label="Profesor"></select></div>
+        <div id="prof-choques"></div>
+        <div id="prof-entrega"></div>
+        <div id="prof-foto"></div>
         <div id="prof-avisos"></div>
         <div id="prof-tabla" class="tabla-horas-wrap"></div>
         <div id="prof-grilla" class="semana" hidden></div>
@@ -156,6 +184,7 @@
         <div class="toolbar">
           <input type="search" id="hist-q" placeholder="Buscar por persona o detalle…" aria-label="Buscar en el historial">
           <select id="hist-accion" aria-label="Tipo de acción"><option value="">Todas las acciones</option></select>
+          <button type="button" class="btn btn-secondary" id="btn-borrar-historial">🗑️ Borrar historial</button>
         </div>
         <div class="card" id="contenedor-historial">Cargando…</div>
       </section>
@@ -194,6 +223,15 @@
           <h3>Publicar aviso</h3>
           <input type="text" name="titulo" required maxlength="150" placeholder="Título">
           <textarea name="contenido" required maxlength="2000" rows="3" placeholder="Detalle del aviso…"></textarea>
+          <label class="destino-label">Dirigido a
+            <select name="destino_tipo" id="aviso-destino-tipo" aria-label="A quién va dirigido el aviso">
+              <option value="todos">Todos</option>
+              <option value="cursos">Uno o más cursos</option>
+              <option value="turno">Un turno</option>
+              <option value="profesores">Un grupo de profesores</option>
+            </select>
+          </label>
+          <div id="aviso-destino-opciones" class="destino-opciones" hidden></div>
           <button class="btn btn-primary" type="submit">Publicar</button>
         </form>
         <div id="lista-avisos" class="feed"></div>
@@ -211,14 +249,59 @@
         <div id="lista-noticias" class="feed"></div>
       </section>
 
+      <!-- MAPA 3D (todos los roles) -->
+      <section id="vista-mapa3d" class="vista">
+        <header class="vista-header">
+          <div><h2>Mapa 3D</h2><p class="sub">Plano 3D de la Escuela Técnica Maestro Carlos Martín De Vecchi (UTU Artigas). Arrastrá para girar, usá la rueda o los botones para acercar y tocá un salón para ver sus datos.</p></div>
+        </header>
+        <div class="toolbar m3d-toolbar">
+          <div class="m3d-grupo" role="group" aria-label="Planta a mostrar" id="m3d-plantas">
+            <button type="button" class="btn btn-secondary" data-planta="todas">Ambas plantas</button>
+            <button type="button" class="btn btn-secondary is-on" data-planta="0">Planta baja</button>
+            <button type="button" class="btn btn-secondary" data-planta="1">Planta alta</button>
+          </div>
+          <div class="m3d-grupo" role="group" aria-label="Cámara">
+            <button type="button" class="btn btn-secondary" id="m3d-zoom-mas" aria-label="Acercar" title="Acercar">＋</button>
+            <button type="button" class="btn btn-secondary" id="m3d-zoom-menos" aria-label="Alejar" title="Alejar">－</button>
+            <button type="button" class="btn btn-secondary" id="m3d-reset">↺ Reiniciar vista</button>
+            <button type="button" class="btn btn-secondary" id="m3d-estilo">🎨 Colores por tipo</button>
+          </div>
+          <label class="m3d-ocupacion"><input type="checkbox" id="m3d-ocup-on"> Ver ocupación
+            <select id="m3d-ocup-dia" aria-label="Día" disabled></select>
+            <input type="time" id="m3d-ocup-hora" aria-label="Hora" disabled>
+          </label>
+        </div>
+        <div class="m3d-layout">
+          <div class="m3d-escena" id="m3d-escena" tabindex="0" role="application" aria-label="Plano 3D de la Escuela Técnica De Vecchi, UTU Artigas. Usá las flechas para girar y + o - para acercar.">
+            <div class="m3d-mundo" id="m3d-mundo"></div>
+            <div class="m3d-ayuda" aria-hidden="true">🖱️ Arrastrá para girar</div>
+          </div>
+          <aside class="card m3d-panel" id="m3d-panel" aria-live="polite"></aside>
+        </div>
+        <div class="m3d-leyenda" id="m3d-leyenda"></div>
+        <p class="muted m3d-nota">Basado en el plano oficial de la escuela. Las alturas son ilustrativas y la planta alta se dibuja flotando sobre la baja (su posición exacta es aproximada).</p>
+      </section>
+
+      <!-- CLIMA (todos los roles) -->
+      <section id="vista-clima" class="vista">
+        <header class="vista-header">
+          <div><h2>Clima en Artigas</h2><p class="sub" id="clima-sub">Clima actual y pronóstico de los próximos días.</p></div>
+          <div class="acciones"><button type="button" class="btn btn-secondary" id="btn-clima-recargar">🔄 Actualizar</button></div>
+        </header>
+        <div id="clima-contenido"><div class="card">Cargando…</div></div>
+      </section>
+
       <!-- CHAT -->
       <section id="vista-chat" class="vista">
-        <header class="vista-header"><div><h2>Asistente</h2><p class="sub">Preguntá por disponibilidad, reemplazos o pedí la tabla y la imagen del horario.</p></div></header>
+        <header class="vista-header"><div><h2>Asistente</h2><p class="sub">Preguntá por disponibilidad, reemplazos o pedí la tabla y la imagen del horario. Los profesores también entregan acá su horario semanal.</p></div></header>
         <div class="chat-atajos" id="chat-atajos"></div>
         <div class="card chat-box">
           <div id="chat-mensajes" class="chat-mensajes"><div class="chat-msg bot">¡Hola! ¿En qué te ayudo con los horarios?</div></div>
           <form id="chat-form" class="chat-form">
-            <input type="text" id="chat-input" placeholder="Escribí un mensaje…" autocomplete="off">
+            <select id="sel-foto-profe" aria-label="Profesor al que pertenece la foto" title="Profesor al que pertenece la foto del horario" hidden></select>
+            <button type="button" class="btn btn-secondary" id="btn-foto-horario" title="Subir una foto de la planilla de horario" hidden>📷</button>
+            <input type="file" id="input-foto-horario" accept="image/*" hidden>
+            <textarea id="chat-input" rows="1" maxlength="4000" placeholder="Escribí un mensaje… (Shift+Enter para otra línea)" autocomplete="off"></textarea>
             <button type="submit" class="btn btn-primary">Enviar</button>
           </form>
         </div>
@@ -246,6 +329,7 @@
     <form id="form-clase" method="dialog">
       <h3 id="modal-clase-titulo">Nueva clase</h3>
       <div class="grid2">
+        <label class="span2">Curso del horario<input type="text" id="clase-curso" required maxlength="40" readonly aria-readonly="true"><small class="muted">Cada curso tiene su propio horario: para cargar otro curso, cambiá de pestaña o creá uno nuevo.</small></label>
         <label>Día<select id="clase-dia"></select></label>
         <label>Materia<input type="text" id="clase-materia" required maxlength="80" placeholder="Matemáticas"></label>
         <label>Desde<input type="time" id="clase-inicio" required></label>
@@ -267,8 +351,27 @@
     </form>
   </dialog>
 
+  <!-- Modal cambiar contraseña -->
+  <dialog id="modal-clave">
+    <form id="form-clave" method="dialog">
+      <h3>Cambiar contraseña</h3>
+      <div class="grid2">
+        <label class="span2">Contraseña actual<input type="password" id="clave-actual" required autocomplete="current-password"></label>
+        <label class="span2">Contraseña nueva<input type="password" id="clave-nueva" required minlength="8" maxlength="100" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></label>
+        <label class="span2">Repetí la nueva<input type="password" id="clave-repetir" required minlength="8" maxlength="100" autocomplete="new-password"></label>
+      </div>
+      <p id="clave-error" class="auth-error" role="alert"></p>
+      <div class="modal-acciones">
+        <button type="button" class="btn btn-ghost" id="clave-cancelar">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="zona-impresion" aria-hidden="true"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
+  <script src="clima.js"></script>
+  <script src="mapa3d.js"></script>
 </body>
 </html>

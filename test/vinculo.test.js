@@ -8,7 +8,7 @@ const db = require('../db/database');
 const lib = require('../lib/horariosLib');
 
 const turno2 = ['Silvio Fagundez', 'Robert Rodríguez', 'Mauro Ipar', 'Carolina Quevedo', 'Jose Larronda', 'Ana Li Rodríguez', 'María Bitancourt', 'Andrea Da Silva', 'Jonhy Vasconcellos'];
-const turno1 = ['Mónica Prats', 'María Manassi', 'Antonella Del Rio', 'Bruno Cornelius', 'Saúl Pereira', 'Ana Mensinguer', 'Martin Tulipano', 'Marcos Kaiser'];
+const turno1 = ['Mónica Prats', 'María Manassi', 'Antonella Del Rio', 'Bruno Cornelius', 'Saúl Pereira', 'Ana Mensinguer', 'Martin Tulipano', 'Marcos Kaiser', 'Valentina Rodríguez'];
 const cuentas = [...turno2, ...turno1];
 
 cuentas.forEach((n, i) => db.prepare("INSERT INTO usuarios (nombre, email, password_hash, rol) VALUES (?, ?, 'h', 'profesor')").run(n, `p${i}@t.com`));
@@ -57,7 +57,7 @@ test('el selector del admin ofrece a todos los de la plantilla (con o sin cuenta
   const lista = lib.profesoresParaSelector();
   const { PLANTILLA } = require('../lib/profesoresPlantilla');
   for (const p of PLANTILLA) assert.equal(lista.filter(x => lib.mismoNombre(x.nombre, p.nombre)).length, 1, p.nombre);
-  assert.equal(PLANTILLA.length, 17);
+  assert.equal(PLANTILLA.length, 18);
   const conCuenta = lista.filter(x => x.cuenta).length;
   assert.equal(conCuenta, db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE rol = 'profesor'").get().n);
   assert.ok(lista.find(x => x.nombre === 'Silvio Fagundez').turno === 2);

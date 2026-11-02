@@ -40,16 +40,16 @@ test('sin cuenta todavía, se vinculan cuando se registra', () => {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM horarios WHERE profesor_id = ?').get(id).n, CLASES.length);
 });
 
-test('las cuentas de los 17 profesores se crean solas y el horario de Silvio queda en la suya', () => {
+test('las cuentas de los 18 profesores se crean solas y el horario de Silvio queda en la suya', () => {
   const { crearCuentasProfesores } = require('../lib/cuentasProfesores');
   const { PLANTILLA } = require('../lib/profesoresPlantilla');
   db.prepare('DELETE FROM horarios').run(); db.prepare('DELETE FROM usuarios').run();
   const r = crearCuentasProfesores();
   assert.equal(r.length, PLANTILLA.length);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE rol = 'profesor'").get().n, 17);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE rol = 'profesor'").get().n, 18);
   assert.equal(crearCuentasProfesores().filter(p => p.creada).length, 0, 'la segunda vez no duplica');
   cargarHorarioSilvio({ forzar: true });
-  const silvio = db.prepare("SELECT id FROM usuarios WHERE email = 'silvio.fagundez@cuadrilla.com'").get();
+  const silvio = db.prepare("SELECT id FROM usuarios WHERE email = 'silvio.fagundez@gmail.com'").get();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM horarios WHERE profesor_id = ?').get(silvio.id).n, CLASES.length);
   assert.ok(lib.profesoresParaSelector().every(p => p.cuenta && p.id), 'todos aparecen con cuenta en el selector del admin');
 });
@@ -70,6 +70,27 @@ test('el horario de Saúl es válido, no se pisa y queda en su cuenta', () => {
   db.prepare('DELETE FROM horarios').run(); db.prepare('DELETE FROM usuarios').run();
   crearCuentasProfesores();
   assert.equal(cargarHorarioSaul({ forzar: true }), C.length);
-  const saul = db.prepare("SELECT id FROM usuarios WHERE email = 'saul.pereira@cuadrilla.com'").get();
+  const saul = db.prepare("SELECT id FROM usuarios WHERE email = 'saul.pereira@gmail.com'").get();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM horarios WHERE profesor_id = ?').get(saul.id).n, C.length);
+});
+
+test('el horario de Valentina es válido, no se pisa, tiene curso y queda en su cuenta', () => {
+  const { CLASES: C, cargarHorarioValentina } = require('../lib/horarioValentina');
+  const por = {};
+  for (const [dia, ini, fin, materia] of C) {
+    const v = lib.validarBloque({ dia, hora_inicio: ini, hora_fin: fin, materia });
+    assert.ok(v.bloque, `${dia} ${ini}: ${v.error}`);
+    (por[dia] ||= []).push([lib.aMinutos(ini), lib.aMinutos(fin), materia]);
+  }
+  for (const [dia, l] of Object.entries(por)) {
+    l.sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < l.length; i++) assert.ok(l[i][0] >= l[i - 1][1], `${dia}: ${l[i - 1][2]} pisa a ${l[i][2]}`);
+  }
+  const { crearCuentasProfesores } = require('../lib/cuentasProfesores');
+  db.prepare('DELETE FROM horarios').run(); db.prepare('DELETE FROM usuarios').run();
+  crearCuentasProfesores();
+  assert.equal(cargarHorarioValentina({ forzar: true }), C.length);
+  const v = db.prepare("SELECT id FROM usuarios WHERE email = 'valentina.rodriguez@gmail.com'").get();
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM horarios WHERE profesor_id = ?').get(v.id).n, C.length);
+  assert.ok(db.prepare("SELECT COUNT(*) AS n FROM horarios WHERE profesor_id = ? AND curso = '3°MA'").get(v.id).n >= 1);
 });
