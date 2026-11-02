@@ -216,3 +216,47 @@ let consultar = async () => {
   } catch (errPrincipal) {
     console.error('clima: Open-Meteo falló (' + errPrincipal.message + '). Probando MET Noruega.');
     try {
+      const api = await pedirJson(URL_MET, { Accept: 'application/json', 'User-Agent': `Cuadrilla/1.0 (${CONTACTO})` }, 'MET Noruega');
+      return desdeMetNo(api);
+    } catch (errRespaldo) {
+      throw new Error(`${errPrincipal.message} / ${errRespaldo.message}`);
+    }
+  }
+};
+
+let cache = { datos: null, en: 0 };
+let pendiente = null;
+
+async function obtenerClima(ahora = Date.now()) {
+  if (cache.datos && ahora - cache.en < CACHE_MS) return { ...cache.datos, desactualizado: false };
+  // Si ya hay una consulta en vuelo, todos esperan la misma (no se pide varias veces a la vez).
+  if (!pendiente) {
+    pendiente = consultar().then(normalizar).then(d => { cache = { datos: d, en: ahora }; return d; })
+      .finally(() => { pendiente = null; });
+  }
+  try {
+    return { ...(await pendiente), desactualizado: false };
+  } catch (err) {
+    // Sin conexión: se muestra el último dato guardado, marcado como desactualizado.
+    if (cache.datos) return { ...cache.datos, desactualizado: true };
+    throw err;
+  }
+}
+
+// GET /api/clima - clima actual y pronóstico de 5 días en Artigas. Todos los roles con sesión.
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await obtenerClima());
+  } catch (err) {
+    console.error('clima:', err.message);
+    res.status(502).json({ error: 'No se pudo obtener el clima de Artigas en este momento. Probá de nuevo en unos minutos.' });
+  }
+});
+
+module.exports = router;
+module.exports._interno = {
+  normalizar, describir, direccionViento, obtenerClima, desdeMetNo, CIUDAD, URL_API,
+  usarConsulta(fn) { consultar = fn; cache = { datos: null, en: 0 }; pendiente = null; },
+  vaciarCache() { cache = { datos: null, en: 0 }; pendiente = null; }
+};
