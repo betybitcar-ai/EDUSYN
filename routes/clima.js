@@ -5,8 +5,10 @@ const router = express.Router();
 
 // Ciudad de Artigas, Uruguay. Open-Meteo es gratuito y no necesita clave.
 const CIUDAD = { nombre: 'Artigas', pais: 'Uruguay', lat: -30.4, lon: -56.4667, zona: 'America/Montevideo' };
-const CACHE_MS = 10 * 60 * 1000;   // el clima se pide como mucho una vez cada 10 minutos para todos los usuarios
+const CACHE_MS = 30 * 60 * 1000;   // el clima se pide como mucho una vez cada 30 minutos para todos los usuarios
 const TIMEOUT_MS = 8000;
+const REINTENTOS = 3;              // cantidad de intentos si el servicio responde 429 o un error de servidor
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const URL_API = 'https://api.open-meteo.com/v1/forecast?' + new URLSearchParams({
   latitude: String(CIUDAD.lat),
@@ -97,14 +99,25 @@ function normalizar(api) {
 }
 
 // La función que consulta a Open-Meteo se puede reemplazar (así los tests no usan internet).
+// Reintenta si el servicio responde 429 (demasiadas solicitudes) o un error de servidor (5xx).
 let consultar = async () => {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
-  try {
-    const r = await fetch(URL_API, { signal: ctl.signal, headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error(`El servicio del clima respondió ${r.status}.`);
-    return await r.json();
-  } finally { clearTimeout(timer); }
+  let ultimoError;
+  for (let intento = 0; intento < REINTENTOS; intento++) {
+    if (intento > 0) await esperar(2000 * intento);   // espera 2 s, luego 4 s
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+    try {
+      const r = await fetch(URL_API, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+      if (r.ok) return await r.json();
+      ultimoError = new Error(`El servicio del clima respondió ${r.status}.`);
+      if (r.status !== 429 && r.status < 500) break;   // otros errores no se reintentan
+    } catch (err) {
+      ultimoError = err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw ultimoError;
 };
 
 let cache = { datos: null, en: 0 };
