@@ -1,17 +1,17 @@
 :root {
-  --fondo: #646a6b;
+  --fondo: #858b8b;
   --crema: #faf9f8;
   --crema-2: #fbf7ee;
-  --navy: #32394b;
-  --navy-2: #444d63;
-  --tinta: #1f2937;
-  --suave: #5f6673;
+  --navy: #090909;
+  --navy-2: #131314;
+  --tinta: #252525;
+  --suave: #353232;
   --borde: #e3dac6;
   --ok: #16a34a;
   --mal: #dc2626;
   --figma: #a259ff;
   --radio: 14px;
-  --sombra: 0 1px 2px rgba(31,41,55,.08), 0 6px 18px rgba(31,41,55,.08);
+  --sombra: 0 1px 2px rgba(5, 5, 5, 0.08), 0 6px 18px rgba(31,41,55,.08);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
 [hidden] { display: none !important; }
@@ -468,15 +468,3 @@ dialog h3 { color: var(--navy); margin-bottom: 14px; font-size: 22px; }
 .foto-entrega p { margin: 4px 0 8px; font-size: 14px; }
 .foto-entrega .mini { border: 1px solid #c3cad6; background: #f5f7fa; border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
 @media (max-width: 560px) { .foto-entrega { flex-direction: column; } .foto-entrega img { width: 100%; max-height: 220px; } }
-
-/* ---------- un horario por curso ---------- */
-.cursos-barra { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; }
-.cursos-tabs { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
-.curso-tab { display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 700;
-  border: 1.5px solid var(--borde); background: #fff; color: var(--navy); cursor: pointer; }
-.curso-tab:hover { background: #f1ead9; }
-.curso-tab.is-on { background: var(--navy); border-color: var(--navy); color: #fff; }
-.curso-tab .punto { width: 9px; height: 9px; border-radius: 50%; background: #f0a53a; }
-.curso-tab .punto.pub { background: #2fb457; }
-.curso-tab small { font-weight: 600; opacity: .75; }
-.cursos-vacio { color: var(--suave); font-size: 14px; }
