@@ -3,11 +3,12 @@ const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Ciudad de Artigas, Uruguay. Open-Meteo es gratuito y no necesita clave.
+// Ciudad de Artigas, Uruguay.
+// Fuente principal: Open-Meteo (gratis, sin clave). Respaldo: MET Noruega (gratis, sin clave, pide un User-Agent con contacto).
 const CIUDAD = { nombre: 'Artigas', pais: 'Uruguay', lat: -30.4, lon: -56.4667, zona: 'America/Montevideo' };
 const CACHE_MS = 30 * 60 * 1000;   // el clima se pide como mucho una vez cada 30 minutos para todos los usuarios
 const TIMEOUT_MS = 8000;
-const REINTENTOS = 3;              // cantidad de intentos si el servicio responde 429 o un error de servidor
+const REINTENTOS = 2;              // intentos por proveedor si responde 429 o un error de servidor
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const URL_API = 'https://api.open-meteo.com/v1/forecast?' + new URLSearchParams({
@@ -19,6 +20,11 @@ const URL_API = 'https://api.open-meteo.com/v1/forecast?' + new URLSearchParams(
   forecast_days: '5',
   wind_speed_unit: 'kmh'
 }).toString();
+
+// MET Noruega (respaldo). Identifica a la app con un contacto; se puede cambiar con la variable CLIMA_CONTACTO.
+const UTC_OFFSET_H = -3;   // Uruguay (UTC-3, sin horario de verano)
+const CONTACTO = process.env.CLIMA_CONTACTO || 'https://github.com/betybitcar-ai/EDUSYN';
+const URL_MET = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${CIUDAD.lat.toFixed(4)}&lon=${CIUDAD.lon.toFixed(4)}`;
 
 // Códigos WMO → descripción en español + emoji (día / noche).
 const CODIGOS = {
@@ -98,18 +104,100 @@ function normalizar(api) {
   };
 }
 
-// La función que consulta a Open-Meteo se puede reemplazar (así los tests no usan internet).
-// Reintenta si el servicio responde 429 (demasiadas solicitudes) o un error de servidor (5xx).
-let consultar = async () => {
+// ---- Respaldo: MET Noruega ----
+// Símbolos de MET Noruega → códigos WMO (para reutilizar las mismas descripciones e iconos).
+const SIMBOLO_A_WMO = {
+  clearsky: 0, fair: 1, partlycloudy: 2, cloudy: 3, fog: 45,
+  lightrain: 61, rain: 63, heavyrain: 65,
+  lightrainshowers: 80, rainshowers: 81, heavyrainshowers: 82,
+  lightsleet: 66, sleet: 66, heavysleet: 67,
+  lightsleetshowers: 66, sleetshowers: 66, heavysleetshowers: 67,
+  lightsnow: 71, snow: 73, heavysnow: 75,
+  lightsnowshowers: 85, snowshowers: 85, heavysnowshowers: 86
+};
+
+function simboloAWmo(simbolo) {
+  if (!simbolo) return null;
+  const base = String(simbolo).replace(/_(day|night|polartwilight)$/, '');
+  if (base.includes('thunder')) return 95;
+  return base in SIMBOLO_A_WMO ? SIMBOLO_A_WMO[base] : null;
+}
+
+// Convierte la respuesta de MET Noruega a la misma forma que Open-Meteo, para usar el mismo normalizar().
+function desdeMetNo(api) {
+  const serie = api && api.properties && api.properties.timeseries;
+  if (!Array.isArray(serie) || !serie.length) throw new Error('Respuesta de MET Noruega incompleta.');
+  const local = (t) => new Date(Date.parse(t) + UTC_OFFSET_H * 3600 * 1000);
+
+  const dias = new Map();
+  for (const p of serie) {
+    const det = p.data && p.data.instant && p.data.instant.details;
+    if (!det || !Number.isFinite(Date.parse(p.time))) continue;
+    const l = local(p.time);
+    const fecha = l.toISOString().slice(0, 10);
+    if (!dias.has(fecha)) dias.set(fecha, { temps: [], vientos: [], lluvia: 0, simbolo: null, distancia: Infinity });
+    const dia = dias.get(fecha);
+    if (Number.isFinite(det.air_temperature)) dia.temps.push(det.air_temperature);
+    if (Number.isFinite(det.wind_speed)) dia.vientos.push(det.wind_speed * 3.6);   // m/s → km/h
+
+    // La lluvia se suma por hora cuando hay datos horarios; si no, por bloques de 6 horas (sin repetir).
+    const n1 = p.data.next_1_hours, n6 = p.data.next_6_hours;
+    const mm = n1 ? (n1.details && n1.details.precipitation_amount) : (n6 && n6.details && n6.details.precipitation_amount);
+    if (Number.isFinite(mm)) dia.lluvia += mm;
+
+    // Símbolo del día: el más cercano al mediodía local.
+    const sim = (n6 && n6.summary && n6.summary.symbol_code) || (n1 && n1.summary && n1.summary.symbol_code);
+    if (sim) {
+      const dist = Math.abs(l.getUTCHours() - 12);
+      if (dist < dia.distancia) { dia.distancia = dist; dia.simbolo = sim; }
+    }
+  }
+
+  const fechas = [...dias.keys()].sort().slice(0, 5);
+  const primero = serie[0];
+  const det0 = (primero.data && primero.data.instant && primero.data.instant.details) || {};
+  const prox = (primero.data && (primero.data.next_1_hours || primero.data.next_6_hours)) || {};
+  const simActual = prox.summary && prox.summary.symbol_code;
+  const horaLocal = local(primero.time).getUTCHours();
+  const esDia = simActual ? !/_night$/.test(simActual) : (horaLocal >= 6 && horaLocal < 20);
+  const maxDe = (arr) => arr.length ? Math.max(...arr) : null;
+  const minDe = (arr) => arr.length ? Math.min(...arr) : null;
+
+  return {
+    current: {
+      time: local(primero.time).toISOString().slice(0, 16),
+      temperature_2m: det0.air_temperature,
+      apparent_temperature: det0.air_temperature,
+      relative_humidity_2m: det0.relative_humidity,
+      precipitation: prox.details && prox.details.precipitation_amount,
+      weather_code: simboloAWmo(simActual),
+      wind_speed_10m: Number.isFinite(det0.wind_speed) ? det0.wind_speed * 3.6 : null,
+      wind_direction_10m: det0.wind_from_direction,
+      is_day: esDia ? 1 : 0
+    },
+    daily: {
+      time: fechas,
+      weather_code: fechas.map((f) => simboloAWmo(dias.get(f).simbolo)),
+      temperature_2m_max: fechas.map((f) => maxDe(dias.get(f).temps)),
+      temperature_2m_min: fechas.map((f) => minDe(dias.get(f).temps)),
+      precipitation_probability_max: fechas.map(() => null),   // MET Noruega (compact) no la incluye
+      precipitation_sum: fechas.map((f) => dias.get(f).lluvia),
+      wind_speed_10m_max: fechas.map((f) => maxDe(dias.get(f).vientos))
+    }
+  };
+}
+
+// Pide un JSON con tiempo límite y reintentos (solo si responde 429 o un error de servidor).
+async function pedirJson(url, headers, nombre) {
   let ultimoError;
   for (let intento = 0; intento < REINTENTOS; intento++) {
-    if (intento > 0) await esperar(2000 * intento);   // espera 2 s, luego 4 s
+    if (intento > 0) await esperar(2000 * intento);   // espera 2 s antes del segundo intento
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
     try {
-      const r = await fetch(URL_API, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+      const r = await fetch(url, { signal: ctl.signal, headers });
       if (r.ok) return await r.json();
-      ultimoError = new Error(`El servicio del clima respondió ${r.status}.`);
+      ultimoError = new Error(`${nombre} respondió ${r.status}.`);
       if (r.status !== 429 && r.status < 500) break;   // otros errores no se reintentan
     } catch (err) {
       ultimoError = err;
@@ -118,41 +206,13 @@ let consultar = async () => {
     }
   }
   throw ultimoError;
-};
-
-let cache = { datos: null, en: 0 };
-let pendiente = null;
-
-async function obtenerClima(ahora = Date.now()) {
-  if (cache.datos && ahora - cache.en < CACHE_MS) return { ...cache.datos, desactualizado: false };
-  // Si ya hay una consulta en vuelo, todos esperan la misma (no se pide varias veces a la vez).
-  if (!pendiente) {
-    pendiente = consultar().then(normalizar).then(d => { cache = { datos: d, en: ahora }; return d; })
-      .finally(() => { pendiente = null; });
-  }
-  try {
-    return { ...(await pendiente), desactualizado: false };
-  } catch (err) {
-    // Sin conexión: se muestra el último dato guardado, marcado como desactualizado.
-    if (cache.datos) return { ...cache.datos, desactualizado: true };
-    throw err;
-  }
 }
 
-// GET /api/clima - clima actual y pronóstico de 5 días en Artigas. Todos los roles con sesión.
-router.get('/', requireAuth, async (req, res) => {
+// La función que consulta el clima se puede reemplazar (así los tests no usan internet).
+// Primero Open-Meteo; si falla (por ejemplo 429), se usa MET Noruega.
+let consultar = async () => {
   try {
-    res.set('Cache-Control', 'no-store');
-    res.json(await obtenerClima());
-  } catch (err) {
-    console.error('clima:', err.message);
-    res.status(502).json({ error: 'No se pudo obtener el clima de Artigas en este momento. Probá de nuevo en unos minutos.' });
-  }
-});
-
-module.exports = router;
-module.exports._interno = {
-  normalizar, describir, direccionViento, obtenerClima, CIUDAD, URL_API,
-  usarConsulta(fn) { consultar = fn; cache = { datos: null, en: 0 }; pendiente = null; },
-  vaciarCache() { cache = { datos: null, en: 0 }; pendiente = null; }
-};
+    return await pedirJson(URL_API, { Accept: 'application/json' }, 'El servicio del clima');
+  } catch (errPrincipal) {
+    console.error('clima: Open-Meteo falló (' + errPrincipal.message + '). Probando MET Noruega.');
+    try {
